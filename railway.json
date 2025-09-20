@@ -1,0 +1,14 @@
+{
+  "build": {
+    "commands": [
+      "pip install -r requirements.txt"
+    ]
+  },
+  "deploy": {
+    "startCommand": "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+  },
+  "healthcheck": {
+    "path": "/health",
+    "timeout": 30
+  }
+}
