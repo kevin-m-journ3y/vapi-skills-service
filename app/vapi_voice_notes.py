@@ -12,17 +12,30 @@ logger = logging.getLogger(__name__)
 class VAPIConfig(BaseModel):
     """Configuration for VAPI voice notes system"""
     api_key: str
-    webhook_base_url: str
+    webhook_base_url: Optional[str] = None
     phone_number_id: Optional[str] = None
     
     class Config:
         env_prefix = "VAPI_"
+        
+    def __init__(self, **data):
+        # Set default webhook_base_url if not provided
+        if 'webhook_base_url' not in data or data['webhook_base_url'] is None:
+            data['webhook_base_url'] = "https://journ3y-vapi-skills-service.up.railway.app"
+        super().__init__(**data)
 
 class VoiceNotesVAPISystem:
-    def __init__(self):
-        self.api_key = settings.VAPI_API_KEY
+    def __init__(self, config: Optional[VAPIConfig] = None, webhook_base_url: Optional[str] = None):
+        # Handle both old and new initialization patterns
+        if config:
+            self.api_key = config.api_key
+            self.webhook_base = webhook_base_url or config.webhook_base_url or "https://journ3y-vapi-skills-service.up.railway.app"
+        else:
+            # Fallback to environment variables
+            self.api_key = settings.VAPI_API_KEY
+            self.webhook_base = webhook_base_url or settings.WEBHOOK_BASE_URL or "https://journ3y-vapi-skills-service.up.railway.app"
+            
         self.base_url = "https://api.vapi.ai"
-        self.webhook_base = settings.WEBHOOK_BASE_URL or "https://journ3y-vapi-skills-service.up.railway.app"
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -42,16 +55,16 @@ class VoiceNotesVAPISystem:
                         "role": "system",
                         "content": """You are the Built by MK authentication assistant.
 
-                Your job:
-                1. Answer with a warm greeting: "Hello! This is Built by MK. Let me verify your access..."
-                2. IMMEDIATELY call authenticate_caller with the caller's phone number
-                3. Based on the response:
-                - If authorized for voice_notes: Say "Perfect! I can see you're authorized to record voice notes. Let me connect you to our voice notes system right away." Then transfer to "Voice Notes Agent"
-                - If not authorized: Say "I'm sorry, this number isn't authorized for voice notes. Please contact Built by MK administration."
+                    Your job:
+                    1. Answer with a warm greeting: "Hello! This is Built by MK. Let me verify your access..."
+                    2. IMMEDIATELY call authenticate_caller with the caller's phone number
+                    3. Based on the response:
+                    - If authorized for voice_notes: Say "Perfect! I can see you're authorized to record voice notes. Let me connect you to our voice notes system right away." Then transfer to "Voice Notes Agent"
+                    - If not authorized: Say "I'm sorry, this number isn't authorized for voice notes. Please contact Built by MK administration."
 
-                Keep it brief, warm, and professional. Make the transition feel seamless.
+                    Keep it brief, warm, and professional. Make the transition feel seamless.
 
-                TRANSFER: Always transfer to "Voice Notes Agent" for authorized voice_notes users."""
+                    TRANSFER: Always transfer to "Voice Notes Agent" for authorized voice_notes users."""
                     }
                 ],
                 "tools": [
@@ -340,14 +353,22 @@ async def get_vapi_system() -> VoiceNotesVAPISystem:
     return _vapi_system_instance
 
 
-def add_voice_notes_management_endpoints(app):
+def add_voice_notes_management_endpoints(app, voice_notes_system: Optional[VoiceNotesVAPISystem] = None):
     """Add VAPI voice notes management endpoints to FastAPI app"""
+    
+    async def get_system() -> VoiceNotesVAPISystem:
+        """Get the voice notes system instance"""
+        if voice_notes_system:
+            return voice_notes_system
+        else:
+            return await get_vapi_system()
     
     @app.post("/api/v1/vapi/setup-voice-notes")
     async def setup_voice_notes():
         """Setup the complete VAPI voice notes system"""
         try:
-            result = await setup_voice_notes_system()
+            system = await get_system()
+            result = await system.setup_voice_notes_system()
             return result
         except Exception as e:
             logger.error(f"Setup failed: {e}")
@@ -360,7 +381,7 @@ def add_voice_notes_management_endpoints(app):
             phone_number_id = request["phone_number_id"]
             squad_id = request["squad_id"]
             
-            system = await get_vapi_system()
+            system = await get_system()
             
             # Attach phone number to squad
             async with httpx.AsyncClient() as client:
@@ -389,7 +410,7 @@ def add_voice_notes_management_endpoints(app):
     async def get_vapi_status():
         """Get status of VAPI system components"""
         try:
-            system = await get_vapi_system()
+            system = await get_system()
             
             # Check if we can access VAPI API
             async with httpx.AsyncClient() as client:
@@ -428,7 +449,7 @@ def add_voice_notes_management_endpoints(app):
     async def cleanup_vapi_assistants():
         """Clean up Built by MK VAPI assistants (for testing)"""
         try:
-            system = await get_vapi_system()
+            system = await get_system()
             
             async with httpx.AsyncClient() as client:
                 # Get all assistants
