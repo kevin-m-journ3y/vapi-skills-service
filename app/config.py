@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     
     # VAPI
-    AVPI_API_KEY: Optional[str] = None
+    VAPI_API_KEY: Optional[str] = None
     
     # App Settings
     environment: str = "development"
