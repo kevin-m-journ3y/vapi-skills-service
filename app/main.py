@@ -310,21 +310,27 @@ async def authenticate_vapi_caller(
 # ADD PHONE-ONLY AUTHENTICATION ENDPOINT
 # ============================================
 
-@app.post("/api/v1/vapi/authenticate-by-phone", response_model=PhoneAuthResponse)
-async def authenticate_by_phone_only(request: PhoneAuthRequest):
+@app.post("/api/v1/vapi/authenticate-by-phone")
+async def authenticate_by_phone(request: dict):
     """
-    Authenticate caller using only phone number - determines company and skills automatically
-    This works alongside the existing bearer token authentication
+    Authenticate caller by phone number for VAPI
+    Returns user info and available skills for dynamic greeting
     """
-    caller_phone = request.caller_phone
-    vapi_call_id = request.vapi_call_id
-    
     try:
-        # Clean phone number (remove spaces, standardize format)
-        clean_phone = caller_phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+        # Extract phone number - VAPI should provide this
+        caller_phone = request.get("caller_phone") or request.get("phone_number")
+        vapi_call_id = request.get("vapi_call_id") or request.get("call_id")
         
+        # Default to John Smith's number for testing if no phone provided
+        if not caller_phone:
+            caller_phone = "+61412345678"  # John Smith's test number
+            logger.info(f"No phone provided, defaulting to test number: {caller_phone}")
+        
+        logger.info(f"Authenticating phone: {caller_phone} for call: {vapi_call_id}")
+        
+        # Query database for user with this phone number
         async with httpx.AsyncClient() as client:
-            # Find user by phone number across all companies
+            # Get user by phone number
             user_response = await client.get(
                 f"{os.getenv('SUPABASE_URL')}/rest/v1/users",
                 headers={
@@ -332,32 +338,33 @@ async def authenticate_by_phone_only(request: PhoneAuthRequest):
                     "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
                 },
                 params={
-                    "phone_number": f"eq.{clean_phone}",
+                    "phone_number": f"eq.{caller_phone}",
                     "is_active": "eq.true",
-                    "can_call": "eq.true",
-                    "select": "id,name,role,tenant_id,phone_number,tenants!inner(id,name,slug)"
+                    "select": "id,name,phone_number,tenant_id,tenants(name)"
                 }
             )
             
             if user_response.status_code != 200:
-                logger.error(f"Database error during phone authentication: {user_response.text}")
-                return PhoneAuthResponse(
-                    authorized=False,
-                    message="System error during authentication. Please try again."
-                )
+                logger.error(f"Database query failed: {user_response.status_code}")
+                return {
+                    "authorized": False,
+                    "message": "System error during authentication",
+                    "user_name": None,
+                    "available_skills": []
+                }
             
             users = user_response.json()
             
             if not users:
-                logger.warning(f"Unauthorized call attempt from {caller_phone}")
-                return PhoneAuthResponse(
-                    authorized=False,
-                    message=f"Phone number {caller_phone} is not authorized. Please contact your administrator."
-                )
+                logger.warning(f"No active user found for phone: {caller_phone}")
+                return {
+                    "authorized": False,
+                    "message": f"Phone number {caller_phone} is not authorized. Please contact your administrator.",
+                    "user_name": None,
+                    "available_skills": []
+                }
             
-            # Take the first user if multiple (shouldn't happen with proper data)
-            user = users[0]
-            tenant = user["tenants"]
+            user = users[0]  # Take first match
             
             # Get user's available skills
             skills_response = await client.get(
@@ -369,41 +376,105 @@ async def authenticate_by_phone_only(request: PhoneAuthRequest):
                 params={
                     "user_id": f"eq.{user['id']}",
                     "is_enabled": "eq.true",
-                    "select": "skill_id,skills!inner(skill_key,name,vapi_assistant_id,requires_entities,entity_type)"
+                    "select": "skills(skill_key,name,description,vapi_assistant_id)"
                 }
             )
             
             available_skills = []
             if skills_response.status_code == 200:
                 user_skills = skills_response.json()
-                for user_skill in user_skills:
-                    skill = user_skill["skills"]
-                    available_skills.append(SkillInfo(
-                        skill_key=skill["skill_key"],
-                        skill_name=skill["name"],
-                        vapi_assistant_id=skill.get("vapi_assistant_id"),  # Made optional
-                        requires_entities=skill.get("requires_entities", False),  # Default false
-                        entity_type=skill.get("entity_type")
-                    ))
+                available_skills = [
+                    {
+                        "skill_key": skill["skills"]["skill_key"],
+                        "skill_name": skill["skills"]["name"],
+                        "skill_description": skill["skills"]["description"],
+                        "vapi_assistant_id": skill["skills"]["vapi_assistant_id"]
+                    }
+                    for skill in user_skills
+                ]
             
-            # Log this authentication for session tracking
-            log_data = {
-                "vapi_call_id": vapi_call_id,
-                "tenant_id": user["tenant_id"],
-                "user_id": user["id"],
-                "caller_phone": clean_phone,
-                "skill_key": "authentication",
-                "session_type": "internal_user",
-                "status": "completed",
-                "raw_log_data": {
-                    "user_name": user["name"],
-                    "company_name": tenant["name"],
-                    "available_skills": [skill.skill_key for skill in available_skills],
-                    "authentication_method": "phone_only"
+            if not available_skills:
+                logger.warning(f"User {user['name']} has no enabled skills")
+                return {
+                    "authorized": False,
+                    "message": f"User {user['name']} has no enabled skills. Please contact your administrator.",
+                    "user_name": user['name'],
+                    "available_skills": []
                 }
+            
+            # Extract first name for greeting
+            first_name = user['name'].split()[0] if user['name'] else "there"
+            
+            # Log the authentication attempt
+            await log_vapi_interaction(
+                vapi_call_id=vapi_call_id,
+                interaction_type="authentication",
+                user_id=user['id'],
+                tenant_id=user['tenant_id'],
+                caller_phone=caller_phone,
+                details={
+                    "authorized": True,
+                    "user_name": user['name'],
+                    "tenant_name": user['tenants']['name'],
+                    "skills_count": len(available_skills)
+                }
+            )
+            
+            logger.info(f"Successfully authenticated {user['name']} with {len(available_skills)} skills")
+            
+            # Create dynamic greeting based on skills
+            if len(available_skills) == 1:
+                skill = available_skills[0]
+                greeting_message = f"Hi {first_name}! Ready to {skill['skill_description'].lower()}? Let me connect you right away."
+                should_transfer = True
+                transfer_to = skill['vapi_assistant_id'] or "JSMB-Jill-voice-notes"
+            else:
+                skill_names = [skill['skill_description'] for skill in available_skills]
+                skills_text = " or ".join(skill_names)
+                greeting_message = f"Hi {first_name}! I can help you with {skills_text}. What would you like to do today?"
+                should_transfer = False
+                transfer_to = None
+            
+            return {
+                "authorized": True,
+                "message": greeting_message,
+                "user_name": user['name'],
+                "first_name": first_name,
+                "user_id": user['id'],
+                "tenant_id": user['tenant_id'],
+                "tenant_name": user['tenants']['name'],
+                "phone_number": caller_phone,
+                "available_skills": available_skills,
+                "skill_count": len(available_skills),
+                "should_transfer": should_transfer,
+                "transfer_to": transfer_to
             }
             
-            # Store in vapi_logs for session tracking
+    except Exception as e:
+        logger.error(f"Authentication error: {e}")
+        return {
+            "authorized": False,
+            "message": "System error during authentication. Please try again.",
+            "error": str(e),
+            "available_skills": []
+        }
+    
+async def log_vapi_interaction(vapi_call_id: str, interaction_type: str, 
+                             user_id: str = None, tenant_id: str = None,
+                             caller_phone: str = None, details: dict = None):
+    """Log VAPI interactions for debugging and audit"""
+    try:
+        async with httpx.AsyncClient() as client:
+            log_data = {
+                "vapi_call_id": vapi_call_id,
+                "interaction_type": interaction_type,
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+                "caller_phone": caller_phone,
+                "details": details or {},
+                "created_at": datetime.utcnow().isoformat()
+            }
+            
             await client.post(
                 f"{os.getenv('SUPABASE_URL')}/rest/v1/vapi_logs",
                 headers={
@@ -413,81 +484,44 @@ async def authenticate_by_phone_only(request: PhoneAuthRequest):
                 },
                 json=log_data
             )
-            
-            # Determine response based on available skills
-            user_first_name = user["name"].split()[0]
-            company_name = tenant["name"]
-            
-            if not available_skills:
-                logger.warning(f"User {user['name']} ({caller_phone}) has no enabled skills")
-                return PhoneAuthResponse(
-                    authorized=True,
-                    session_type="no_skills",
-                    user_name=user["name"],
-                    user_first_name=user_first_name,
-                    company_name=company_name,
-                    message=f"Hi {user_first_name}! I can see you work for {company_name}, but you don't have any active capabilities. Please contact your administrator.",
-                    available_skills=[],
-                    session_context={
-                        "user_id": user["id"],
-                        "tenant_id": user["tenant_id"],
-                        "caller_phone": clean_phone
-                    }
-                )
-            
-            # Single skill mode (most common)
-            if len(available_skills) == 1:
-                skill = available_skills[0]
-                return PhoneAuthResponse(
-                    authorized=True,
-                    session_type="single_skill",
-                    user_name=user["name"],
-                    user_first_name=user_first_name,
-                    user_role=user["role"],
-                    company_name=company_name,
-                    available_skills=available_skills,
-                    primary_skill=skill,
-                    single_skill_mode=True,
-                    greeting_message=f"Hi {user_first_name}! I can see you work for {company_name}. You're authorized to record voice notes.",
-                    next_assistant_id=skill.vapi_assistant_id,  # May be None for voice_notes
-                    session_context={
-                        "user_id": user["id"],
-                        "tenant_id": user["tenant_id"],
-                        "caller_phone": clean_phone,
-                        "primary_skill_key": skill.skill_key
-                    }
-                )
-            
-            # Multiple skills - offer menu
-            skill_names = [skill.skill_name.lower() for skill in available_skills]
-            skills_list = ", ".join(skill_names[:-1]) + f" or {skill_names[-1]}" if len(skill_names) > 1 else skill_names[0]
-            
-            return PhoneAuthResponse(
-                authorized=True,
-                session_type="single_skill",
-                user_name=user["name"],
-                user_first_name=user_first_name,
-                user_role=user["role"],
-                company_name=company_name,
-                available_skills=available_skills,
-                primary_skill=skill,
-                single_skill_mode=True,
-                greeting_message=f"Hi {user_first_name}! I can see you work for {company_name}. Would you like to {skill.skill_name.lower()} today?",
-                next_assistant_id=skill.vapi_assistant_id,
-                session_context={
-                    "user_id": user["id"],
-                    "tenant_id": user["tenant_id"],
-                    "caller_phone": clean_phone,
-                    "primary_skill_key": skill.skill_key
+    except Exception as e:
+        logger.error(f"Failed to log VAPI interaction: {e}")
+
+
+# Helper function to get session context for voice notes endpoints
+async def get_session_context_by_call_id(vapi_call_id: str) -> dict:
+    """Get session context from VAPI call ID"""
+    try:
+        async with httpx.AsyncClient() as client:
+            # Look up session in vapi_logs
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/vapi_logs",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={
+                    "vapi_call_id": f"eq.{vapi_call_id}",
+                    "interaction_type": "eq.authentication",
+                    "select": "user_id,tenant_id,caller_phone,details",
+                    "order": "created_at.desc",
+                    "limit": "1"
                 }
             )
-    
+            
+            if response.status_code == 200 and response.json():
+                log_entry = response.json()[0]
+                return {
+                    "user_id": log_entry["user_id"],
+                    "tenant_id": log_entry["tenant_id"],
+                    "caller_phone": log_entry["caller_phone"],
+                    "user_name": log_entry["details"].get("user_name"),
+                    "tenant_name": log_entry["details"].get("tenant_name")
+                }
     except Exception as e:
-        logger.error(f"Authentication error for {caller_phone}: {str(e)}")
-        return PhoneAuthResponse(
-            authorized=False,
-            message="System error during authentication. Please try again later."
-        )
+        logger.error(f"Failed to get session context: {e}")
+    
+    return {}
 
 # ============================================
 # ADD SESSION CONTEXT HELPER FUNCTION

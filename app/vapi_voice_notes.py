@@ -1,4 +1,4 @@
-# app/vapi_voice_notes.py - Fixed VAPI Squad Creation
+# app/vapi_voice_notes.py - Generic Multi-Client VAPI System
 import httpx
 import json
 import logging
@@ -42,29 +42,36 @@ class VoiceNotesVAPISystem:
         }
 
     async def create_auth_agent(self) -> str:
-        """Create the authentication agent"""
-        logger.info("Creating authentication agent...")
+        """Create the generic authentication and greeting agent"""
+        logger.info("Creating generic authentication agent...")
         
         agent_config = {
-            "name": "Built by MK Auth",
+            "name": "JSMB-Jill-authenticate-and-greet",
             "model": {
                 "provider": "openai",
                 "model": "gpt-4",
                 "messages": [
                     {
                         "role": "system",
-                        "content": """You are the Built by MK authentication assistant.
+                        "content": """You are Jill, a professional business assistant for construction companies.
 
-                    Your job:
-                    1. Answer with a warm greeting: "Hello! This is Built by MK. Let me verify your access..."
-                    2. IMMEDIATELY call authenticate_caller with the caller's phone number
-                    3. Based on the response:
-                    - If authorized for voice_notes: Say "Perfect! I can see you're authorized to record voice notes. Let me connect you to our voice notes system right away." Then transfer to "Voice Notes Agent"
-                    - If not authorized: Say "I'm sorry, this number isn't authorized for voice notes. Please contact Built by MK administration."
+                        Your job:
+                        1. Answer with a warm greeting: "Hello! This is Jill. Let me verify your access..."
+                        2. IMMEDIATELY call authenticate_caller with the caller's phone number and call ID
+                        3. Based on the authentication response:
+                        - If authorized: Greet them personally using their name from the response
+                        - If they have multiple skills: Ask what they'd like to do based on available_skills
+                        - If they have one skill: Directly transfer to that skill's agent
+                        - If not authorized: Politely explain they're not authorized and suggest contacting their administrator
 
-                    Keep it brief, warm, and professional. Make the transition feel seamless.
+                        GREETING EXAMPLES:
+                        - Multiple skills: "Hi [Name]! I can help you with [skill1] or [skill2]. What would you like to do today?"
+                        - Single skill: "Hi [Name]! Ready to [skill_description]? Let me connect you right away."
+                        - Not authorized: "I'm sorry, this number isn't authorized. Please contact your company administrator."
 
-                    TRANSFER: Always transfer to "Voice Notes Agent" for authorized voice_notes users."""
+                        Keep it warm, professional, and efficient. Always use the person's name when available.
+
+                        TRANSFER: Transfer to the appropriate skill agent based on user choice or single available skill."""
                     }
                 ],
                 "tools": [
@@ -72,7 +79,7 @@ class VoiceNotesVAPISystem:
                         "type": "function",
                         "function": {
                             "name": "authenticate_caller",
-                            "description": "Authenticate caller by phone number",
+                            "description": "Authenticate caller and get their available skills",
                             "parameters": {
                                 "type": "object",
                                 "properties": {
@@ -101,11 +108,11 @@ class VoiceNotesVAPISystem:
                 "stability": 0.5,
                 "similarityBoost": 0.75
             },
-            "firstMessage": "Hello! This is Built by MK. Let me verify your access...",
+            "firstMessage": "Hello! This is Jill. Let me verify your access...",
             "firstMessageMode": "assistant-speaks-first"
         }
 
-        logger.info(f"Creating assistant with payload: {agent_config}")
+        logger.info(f"Creating assistant with payload: {json.dumps(agent_config, indent=2)}")
         
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -122,35 +129,35 @@ class VoiceNotesVAPISystem:
             return result["id"]
 
     async def create_voice_notes_agent(self) -> str:
-        """Create the voice notes recording agent"""
-        logger.info("Creating voice notes agent...")
+        """Create the generic voice notes recording agent"""
+        logger.info("Creating generic voice notes agent...")
         
         agent_config = {
-            "name": "Voice Notes Agent",
+            "name": "JSMB-Jill-voice-notes",
             "model": {
                 "provider": "openai",
                 "model": "gpt-4",
                 "messages": [
                     {
                         "role": "system",
-                        "content": """You are Jill, the Built by MK voice notes assistant.
+                        "content": """You are Jill, a professional voice notes assistant for construction companies.
 
-                    Your job is to help users record voice notes efficiently and naturally.
+                        Your job is to help users record voice notes efficiently and naturally.
 
-                    CONVERSATION FLOW:
-                    1. Greet warmly: "Hi! I'm ready to record your voice note. What would you like to record?"
-                    2. Ask if this note relates to a specific construction site or is general
-                    3. If site-specific, identify which site using identify_context
-                    4. Listen to their complete note/message
-                    5. When they're finished, confirm and save using save_note
+                        CONVERSATION FLOW:
+                        1. Greet warmly: "Hi! I'm ready to record your voice note. What would you like to record?"
+                        2. Ask if this note relates to a specific construction site or is general
+                        3. If site-specific, identify which site using identify_context
+                        4. Listen to their complete note/message
+                        5. When they're finished, confirm and save using save_note
 
-                    CONVERSATION STYLE:
-                    - Natural, warm, and efficient
-                    - Let them speak freely - don't interrupt
-                    - Ask clarifying questions only if needed
-                    - Signal when you're ready to save: "Got it! Let me save that note for you."
+                        CONVERSATION STYLE:
+                        - Natural, warm, and efficient
+                        - Let them speak freely - don't interrupt
+                        - Ask clarifying questions only if needed
+                        - Signal when you're ready to save: "Got it! Let me save that note for you."
 
-                    Remember: You're helping capture important information quickly and accurately."""
+                        Remember: You're helping capture important information quickly and accurately for any construction company."""
                     }
                 ],
                 "tools": [
@@ -227,6 +234,8 @@ class VoiceNotesVAPISystem:
             "firstMessageMode": "assistant-speaks-first"
         }
 
+        logger.info(f"Creating voice notes agent with payload: {json.dumps(agent_config, indent=2)}")
+
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{self.base_url}/assistant",
@@ -234,25 +243,28 @@ class VoiceNotesVAPISystem:
                 json=agent_config
             )
             
+            logger.info(f"Voice notes agent creation response: {response.status_code}")
+            logger.info(f"Voice notes agent creation response body: {response.text}")
+            
             response.raise_for_status()
             result = response.json()
             return result["id"]
 
     async def create_voice_notes_squad(self, auth_agent_id: str, voice_notes_agent_id: str) -> str:
-        """Create the voice notes squad with corrected structure"""
+        """Create the generic voice notes squad with corrected structure"""
         logger.info("Creating squad...")
         
         # Fixed squad configuration - using assistant objects instead of assistantId
         squad_config = {
-            "name": "Built by MK Voice Notes Squad",
+            "name": "JSMB-Jill-multi-skill-squad",
             "members": [
                 {
                     "assistant": auth_agent_id,  # Use the ID directly, not in an object
                     "assistantDestinations": [
                         {
                             "type": "assistant",
-                            "assistantName": "Voice Notes Agent",
-                            "message": "Perfect! Connecting you to our voice notes system..."
+                            "assistantName": "JSMB-Jill-voice-notes",
+                            "message": "Perfect! Connecting you to voice notes..."
                         }
                     ]
                 },
@@ -279,15 +291,15 @@ class VoiceNotesVAPISystem:
                 logger.info("First squad structure failed, trying alternative...")
                 
                 alternative_config = {
-                    "name": "Built by MK Voice Notes Squad",
+                    "name": "JSMB-Jill-multi-skill-squad",
                     "members": [
                         {
                             "assistantId": auth_agent_id,
                             "assistantDestinations": [
                                 {
                                     "type": "assistant", 
-                                    "assistantName": "Voice Notes Agent",
-                                    "message": "Perfect! Connecting you to our voice notes system..."
+                                    "assistantName": "JSMB-Jill-voice-notes",
+                                    "message": "Perfect! Connecting you to voice notes..."
                                 }
                             ]
                         },
@@ -421,12 +433,12 @@ def add_voice_notes_management_endpoints(app, voice_notes_system: Optional[Voice
                 
                 if response.status_code == 200:
                     assistants = response.json()
-                    bmk_assistants = [a for a in assistants if "Built by MK" in a.get("name", "")]
+                    jsmb_assistants = [a for a in assistants if "JSMB-Jill" in a.get("name", "")]
                     
                     return {
                         "success": True,
                         "vapi_connected": True,
-                        "bmk_assistants": len(bmk_assistants),
+                        "jsmb_assistants": len(jsmb_assistants),
                         "total_assistants": len(assistants),
                         "webhook_base": system.webhook_base
                     }
@@ -447,7 +459,7 @@ def add_voice_notes_management_endpoints(app, voice_notes_system: Optional[Voice
 
     @app.delete("/api/v1/vapi/cleanup")
     async def cleanup_vapi_assistants():
-        """Clean up Built by MK VAPI assistants (for testing)"""
+        """Clean up JSMB-Jill VAPI assistants (for testing)"""
         try:
             system = await get_system()
             
@@ -460,10 +472,10 @@ def add_voice_notes_management_endpoints(app, voice_notes_system: Optional[Voice
                 
                 if response.status_code == 200:
                     assistants = response.json()
-                    bmk_assistants = [a for a in assistants if "Built by MK" in a.get("name", "")]
+                    jsmb_assistants = [a for a in assistants if "JSMB-Jill" in a.get("name", "") or "Built by MK" in a.get("name", "")]
                     
                     deleted_count = 0
-                    for assistant in bmk_assistants:
+                    for assistant in jsmb_assistants:
                         delete_response = await client.delete(
                             f"{system.base_url}/assistant/{assistant['id']}",
                             headers=system.headers
@@ -473,7 +485,7 @@ def add_voice_notes_management_endpoints(app, voice_notes_system: Optional[Voice
                     
                     return {
                         "success": True,
-                        "message": f"Deleted {deleted_count} Built by MK assistants"
+                        "message": f"Deleted {deleted_count} JSMB-Jill assistants"
                     }
                 else:
                     return {
