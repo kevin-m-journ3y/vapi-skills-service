@@ -181,7 +181,7 @@ async def setup_voice_notes_system():
         from app.vapi_voice_notes import VoiceNotesVAPISystem
         system = VoiceNotesVAPISystem()
         
-        system_info = await system.setup_complete_system()
+        system_info = await system.setup_voice_notes_system()
         return {
             "success": True,
             "message": "Voice notes system setup complete",
