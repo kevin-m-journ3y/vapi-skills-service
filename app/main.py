@@ -434,32 +434,18 @@ async def authenticate_vapi_caller(
 # ADD PHONE-ONLY AUTHENTICATION ENDPOINT
 # ============================================
 
+# The issue might be that VAPI Server Tools expect a different response format
+# than OpenAI Function Tools. Let me try the Server Tool format:
+
 @app.post("/api/v1/vapi/authenticate-by-phone")
 async def authenticate_by_phone(request: dict):
-    """Authenticate caller by phone number - VAPI compatible with correct parsing"""
+    """Authenticate caller - VAPI Server Tool format"""
     
     try:
-        # Log the full request to understand VAPI's structure
+        # Log the full request
         logger.info(f"Full VAPI request: {request}")
         
-        # VAPI sends requests in this structure (matching N8N working example):
-        # {
-        #   "message": {
-        #     "toolCalls": [
-        #       {
-        #         "id": "call_xyz",
-        #         "function": {
-        #           "arguments": {
-        #             "caller_phone": "+61412345678",
-        #             "vapi_call_id": "test-123"
-        #           }
-        #         }
-        #       }
-        #     ]
-        #   }
-        # }
-        
-        # Extract arguments from the correct VAPI structure
+        # Extract arguments from VAPI structure
         caller_phone = None
         vapi_call_id = None
         tool_call_id = None
@@ -475,12 +461,12 @@ async def authenticate_by_phone(request: dict):
                     caller_phone = arguments.get("caller_phone")
                     vapi_call_id = arguments.get("vapi_call_id")
         
-        # Fallback for direct format (if VAPI changes structure)
+        # Fallback parsing
         if not caller_phone:
             caller_phone = request.get("caller_phone")
             vapi_call_id = request.get("vapi_call_id", "unknown")
         
-        # TEST MODE: If no phone provided, use test number
+        # TEST MODE fallback
         if not caller_phone or caller_phone.strip() == "":
             caller_phone = "+61412345678"
             logger.info(f"No phone provided, defaulting to test number: {caller_phone}")
@@ -504,23 +490,35 @@ async def authenticate_by_phone(request: dict):
             
             if response.status_code != 200:
                 logger.error(f"Supabase error: {response.status_code}")
+                # Try VAPI Server Tool response format
                 return {
-                    "authorized": False,
-                    "message": "System error during authentication"
+                    "results": [{
+                        "toolCallId": tool_call_id,
+                        "result": {
+                            "authorized": False,
+                            "message": "System error during authentication"
+                        }
+                    }]
                 }
             
             users = response.json()
             if not users:
                 logger.info("No users found for phone number")
+                # Try VAPI Server Tool response format
                 return {
-                    "authorized": False,
-                    "message": "Phone number not found or not authorized"
+                    "results": [{
+                        "toolCallId": tool_call_id,
+                        "result": {
+                            "authorized": False,
+                            "message": "Phone number not found or not authorized"
+                        }
+                    }]
                 }
             
             user = users[0]
             logger.info(f"Found user: {user}")
             
-            # Get user's available skills
+            # Get skills (your existing logic)
             skills_response = await client.get(
                 f"{os.getenv('SUPABASE_URL')}/rest/v1/user_skills",
                 headers={
@@ -535,9 +533,6 @@ async def authenticate_by_phone(request: dict):
             )
             
             user_skills = skills_response.json() if skills_response.status_code == 200 else []
-            logger.info(f"Raw user skills: {user_skills}")
-            
-            # Process available skills
             available_skills = []
             for user_skill in user_skills:
                 skill = user_skill.get('skills', {})
@@ -550,8 +545,6 @@ async def authenticate_by_phone(request: dict):
             
             # Generate greeting
             first_name = user['name'].split()[0] if user['name'] else "there"
-            
-            # Clean up skill names for greeting
             skill_names = []
             for skill in available_skills:
                 name = skill.get('skill_name', 'Unknown')
@@ -575,25 +568,38 @@ async def authenticate_by_phone(request: dict):
             logger.info(f"Generated greeting: {greeting}")
             logger.info(f"Successfully authenticated {user['name']} with {len(available_skills)} skills")
             
-            # Return direct object (OpenAI function calling format)
-            return {
-                "authorized": True,
-                "user_id": user['id'],
-                "user_name": user['name'],
-                "first_name": first_name,
-                "tenant_name": user['tenants']['name'],
-                "phone_number": user['phone_number'],
-                "greeting_message": greeting,
-                "available_skills": available_skills,
-                "skill_count": len(available_skills),
-                "single_skill_mode": len(available_skills) == 1
+            # Try VAPI Server Tool response format (matching N8N structure)
+            response_data = {
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": {
+                        "authorized": True,
+                        "user_id": user['id'],
+                        "user_name": user['name'],
+                        "first_name": first_name,
+                        "tenant_name": user['tenants']['name'],
+                        "phone_number": user['phone_number'],
+                        "greeting_message": greeting,
+                        "available_skills": available_skills,
+                        "skill_count": len(available_skills),
+                        "single_skill_mode": len(available_skills) == 1
+                    }
+                }]
             }
+            
+            logger.info(f"Returning response: {response_data}")
+            return response_data
             
     except Exception as e:
         logger.error(f"Authentication error: {e}")
         return {
-            "authorized": False,
-            "message": "Authentication system error"
+            "results": [{
+                "toolCallId": tool_call_id or "unknown",
+                "result": {
+                    "authorized": False,
+                    "message": "Authentication system error"
+                }
+            }]
         }
     
 async def log_vapi_interaction(vapi_call_id: str, interaction_type: str, 
