@@ -12,11 +12,14 @@ import uuid
 from datetime import datetime, date
 import logging
 from app.vapi_voice_notes import VoiceNotesVAPISystem, add_voice_notes_management_endpoints, VAPIConfig
+from app.vapi_tools_setup import VAPIToolsManager
 
 # Load environment variables from .env file
 load_dotenv()
 
 app = FastAPI(title="Multi-Tenant Document RAG + VAPI Skills System", version="1.0.0")
+
+
 
 if os.getenv("VAPI_API_KEY"):
     vapi_config = VAPIConfig(
@@ -156,6 +159,98 @@ class VoiceNoteSaveRequest(BaseModel):
     note_summary: Optional[str] = None
     note_type: str
     full_transcript: str
+
+# ============================================
+# Esystem initialsation
+# ============================================
+
+# Initialize VAPI system
+vapi_system = VoiceNotesVAPISystem()
+tools_manager = VAPIToolsManager()
+
+@app.post("/api/v1/vapi/setup-voice-notes-system")
+async def setup_voice_notes_system():
+    """
+    Complete setup of the VAPI voice notes system including tools, assistants, and squad
+    """
+    try:
+        system_info = await vapi_system.setup_complete_system()
+        return {
+            "success": True,
+            "message": "Voice notes system setup complete",
+            "system_info": system_info
+        }
+    except Exception as e:
+        logger.error(f"Failed to set up voice notes system: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+@app.get("/api/v1/vapi/system-status")
+async def get_system_status():
+    """
+    Get current status of the VAPI voice notes system
+    """
+    try:
+        status = await vapi_system.get_system_status()
+        return {
+            "success": True,
+            "status": status
+        }
+    except Exception as e:
+        logger.error(f"Failed to get system status: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+@app.post("/api/v1/vapi/setup-tools-only")
+async def setup_tools_only():
+    """
+    Set up only the VAPI tools (useful for testing)
+    """
+    try:
+        tool_ids = await tools_manager.setup_all_tools()
+        return {
+            "success": True,
+            "message": "Tools setup complete",
+            "tool_ids": tool_ids
+        }
+    except Exception as e:
+        logger.error(f"Failed to set up tools: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+@app.delete("/api/v1/vapi/cleanup-tools")
+async def cleanup_tools():
+    """
+    Clean up VAPI tools (useful for testing/reset)
+    """
+    try:
+        existing_tools = await tools_manager.get_existing_tools()
+        deleted_count = 0
+        
+        for tool_name, tool_id in existing_tools.items():
+            if tool_name in ['authenticate_caller', 'identify_context', 'save_note']:
+                success = await tools_manager.delete_tool(tool_id)
+                if success:
+                    deleted_count += 1
+        
+        return {
+            "success": True,
+            "message": f"Deleted {deleted_count} tools",
+            "deleted_tools": list(existing_tools.keys())
+        }
+    except Exception as e:
+        logger.error(f"Failed to cleanup tools: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
 
 # ============================================
 # ENVIRONMENT CHECK ENDPOINT
