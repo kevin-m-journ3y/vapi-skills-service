@@ -165,8 +165,8 @@ class VoiceNoteSaveRequest(BaseModel):
 # ============================================
 
 # Initialize VAPI system
-vapi_system = VoiceNotesVAPISystem()
-tools_manager = VAPIToolsManager()
+#vapi_system = VoiceNotesVAPISystem()
+#tools_manager = VAPIToolsManager()
 
 @app.post("/api/v1/vapi/setup-voice-notes-system")
 async def setup_voice_notes_system():
