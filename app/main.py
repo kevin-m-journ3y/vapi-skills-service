@@ -436,26 +436,26 @@ async def authenticate_vapi_caller(
 
 @app.post("/api/v1/vapi/authenticate-by-phone")
 async def authenticate_by_phone(request: dict):
-    """
-    Authenticate caller by phone number for VAPI
-    Returns user info and available skills for dynamic greeting
-    """
+    """Authenticate caller by phone number - VAPI compatible response format"""
+    
     try:
-        # Extract phone number - VAPI should provide this
-        caller_phone = request.get("caller_phone") or request.get("phone_number")
-        vapi_call_id = request.get("vapi_call_id") or request.get("call_id")
+        # Extract the tool call ID from the request (VAPI sends this)
+        tool_call_id = request.get("toolCallId") or request.get("tool_call_id") or "unknown"
         
-        # Default to John Smith's number for testing if no phone provided
-        if not caller_phone:
-            caller_phone = "+61412345678"
+        # Extract phone number with fallback to test number (your existing logic)
+        caller_phone = request.get("caller_phone")
+        vapi_call_id = request.get("vapi_call_id", "unknown")
+        
+        # TEST MODE: If no phone provided or empty, use test number (your existing logic)
+        if not caller_phone or caller_phone.strip() == "":
+            caller_phone = "+61412345678"  # John Smith test number
             logger.info(f"No phone provided, defaulting to test number: {caller_phone}")
         
-        logger.info(f"Authenticating phone: {caller_phone} for call: {vapi_call_id}")
+        logger.info(f"Authenticating phone: {caller_phone} for call: {vapi_call_id}, toolCallId: {tool_call_id}")
         
-        # Query database for user with this phone number
+        # Get user by phone number (your existing code pattern)
         async with httpx.AsyncClient() as client:
-            # Get user by phone number
-            user_response = await client.get(
+            response = await client.get(
                 f"{os.getenv('SUPABASE_URL')}/rest/v1/users",
                 headers={
                     "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
@@ -468,28 +468,35 @@ async def authenticate_by_phone(request: dict):
                 }
             )
             
-            if user_response.status_code != 200:
-                logger.error(f"Database query failed: {user_response.status_code}")
+            if response.status_code != 200:
+                # VAPI format for error
                 return {
-                    "authorized": False,
-                    "message": "System error during authentication",
-                    "available_skills": []
+                    "results": [{
+                        "toolCallId": tool_call_id,
+                        "result": {
+                            "authorized": False,
+                            "message": "System error during authentication"
+                        }
+                    }]
                 }
             
-            users = user_response.json()
-            
+            users = response.json()
             if not users:
-                logger.warning(f"No active user found for phone: {caller_phone}")
+                # VAPI format for unauthorized
                 return {
-                    "authorized": False,
-                    "message": f"Phone number {caller_phone} is not authorized. Please contact your administrator.",
-                    "available_skills": []
+                    "results": [{
+                        "toolCallId": tool_call_id,
+                        "result": {
+                            "authorized": False,
+                            "message": "Phone number not found or not authorized"
+                        }
+                    }]
                 }
             
             user = users[0]
             logger.info(f"Found user: {user}")
             
-            # Get user's available skills
+            # Get user's available skills (your existing code pattern)
             skills_response = await client.get(
                 f"{os.getenv('SUPABASE_URL')}/rest/v1/user_skills",
                 headers={
@@ -503,125 +510,118 @@ async def authenticate_by_phone(request: dict):
                 }
             )
             
+            user_skills = skills_response.json() if skills_response.status_code == 200 else []
+            logger.info(f"Raw user skills: {user_skills}")
+            
+            # Process available skills (your existing code pattern)
             available_skills = []
-            if skills_response.status_code == 200:
-                user_skills = skills_response.json()
-                logger.info(f"Raw user skills: {user_skills}")
-                
-                for skill_data in user_skills:
-                    if skill_data.get("skills"):
-                        skill = skill_data["skills"]
-                        # Handle None values explicitly
-                        skill_key = skill.get("skill_key") or "unknown"
-                        skill_name = skill.get("name") or "Unknown Skill"
-                        skill_description = skill.get("description") or skill_name
-                        vapi_assistant_id = skill.get("vapi_assistant_id")
-                        
-                        available_skills.append({
-                            "skill_key": skill_key,
-                            "skill_name": skill_name,
-                            "skill_description": skill_description,
-                            "vapi_assistant_id": vapi_assistant_id
-                        })
-                
-                logger.info(f"Processed available skills: {available_skills}")
+            for user_skill in user_skills:
+                skill = user_skill.get('skills', {})
+                available_skills.append({
+                    "skill_key": skill.get('skill_key'),
+                    "skill_name": skill.get('name'),
+                    "skill_description": skill.get('description', skill.get('name')),
+                    "vapi_assistant_id": skill.get('vapi_assistant_id')
+                })
             
-            if not available_skills:
-                logger.warning(f"User {user['name']} has no enabled skills")
-                return {
-                    "authorized": False,
-                    "message": f"User {user['name']} has no enabled skills. Please contact your administrator.",
-                    "available_skills": []
-                }
+            logger.info(f"Processed available skills: {available_skills}")
             
-            # Extract first name for greeting
-            first_name = user.get('name', 'there').split()[0] if user.get('name') else "there"
+            # Generate greeting (improved from your existing logic)
+            first_name = user['name'].split()[0] if user['name'] else "there"
             logger.info(f"First name extracted: {first_name}")
             
-            # Create dynamic greeting based on skills - handle None values safely
-            try:
-                if len(available_skills) == 1:
-                    skill = available_skills[0]
-                    skill_desc = skill['skill_description']
-                    greeting_message = f"Hi {first_name}! Ready to {skill_desc.lower()}? Let me connect you right away."
-                    should_transfer = True
-                    transfer_to = skill.get('vapi_assistant_id') or "JSMB-Jill-voice-notes"
+            # Clean up skill names for greeting
+            skill_names = []
+            for skill in available_skills:
+                name = skill.get('skill_name', 'Unknown')
+                if name == 'Site Progress Updates':
+                    skill_names.append('Site Updates')
+                elif name == 'Document Search':
+                    skill_names.append('Document Search')
+                elif name == 'voice_notes':
+                    skill_names.append('Voice Notes')
                 else:
-                    # Create list of skill descriptions, filtering out any None values
-                    skill_descriptions = []
-                    for skill in available_skills:
-                        desc = skill.get('skill_description')
-                        if desc and desc.strip():  # Check for non-empty strings
-                            skill_descriptions.append(desc)
-                    
-                    logger.info(f"Skill descriptions for greeting: {skill_descriptions}")
-                    
-                    if skill_descriptions:
-                        skills_text = " or ".join(skill_descriptions)
-                        greeting_message = f"Hi {first_name}! I can help you with {skills_text}. What would you like to do today?"
-                    else:
-                        # Fallback if no valid descriptions
-                        greeting_message = f"Hi {first_name}! I can help you with several tasks. What would you like to do today?"
-                    
-                    should_transfer = False
-                    transfer_to = None
-                
-                logger.info(f"Generated greeting: {greeting_message}")
-                
-            except Exception as greeting_error:
-                logger.error(f"Error generating greeting: {greeting_error}")
-                greeting_message = f"Hi {first_name}! How can I help you today?"
-                should_transfer = False
-                transfer_to = None
+                    skill_names.append(name)
             
-            # Try to log authentication attempt (don't let this break the response)
-            try:
-                await log_vapi_interaction(
-                    vapi_call_id=vapi_call_id or "unknown",
-                    interaction_type="authentication",
-                    user_id=user['id'],
-                    tenant_id=user['tenant_id'],
-                    caller_phone=caller_phone,
-                    details={
-                        "authorized": True,
-                        "user_name": user.get('name', 'Unknown'),
-                        "tenant_name": user.get('tenants', {}).get('name', 'Unknown') if user.get('tenants') else 'Unknown',
-                        "skills_count": len(available_skills)
-                    }
-                )
-            except Exception as log_error:
-                logger.warning(f"Failed to log authentication (continuing anyway): {log_error}")
+            # Generate greeting based on skill count
+            if len(skill_names) == 1:
+                greeting = f"Hi {first_name}! Ready for {skill_names[0]}? Let me connect you right away."
+            elif len(skill_names) == 2:
+                greeting = f"Hi {first_name}! I can help you with {skill_names[0]} or {skill_names[1]}. What would you like to do today?"
+            else:
+                skills_text = ", ".join(skill_names[:-1]) + f", or {skill_names[-1]}"
+                greeting = f"Hi {first_name}! I can help you with {skills_text}. What would you like to do today?"
             
-            logger.info(f"Successfully authenticated {user.get('name', 'Unknown')} with {len(available_skills)} skills")
+            logger.info(f"Generated greeting: {greeting}")
             
-            # Build response safely
-            response = {
-                "authorized": True,
-                "message": greeting_message,
-                "user_name": user.get('name', 'Unknown'),
-                "first_name": first_name,
-                "user_id": user.get('id'),
-                "tenant_id": user.get('tenant_id'),
-                "tenant_name": user.get('tenants', {}).get('name', 'Unknown') if user.get('tenants') else 'Unknown',
-                "phone_number": caller_phone,
-                "available_skills": available_skills,
-                "skill_count": len(available_skills),
-                "should_transfer": should_transfer,
-                "transfer_to": transfer_to
+            # Optional: Log the session (your existing logging pattern)
+            session_data = {
+                "user_id": user['id'],
+                "vapi_call_id": vapi_call_id,
+                "caller_phone": caller_phone,
+                "authentication_result": "success",
+                "available_skills_count": len(available_skills),
+                "greeting_sent": greeting
             }
             
-            logger.info(f"Final response constructed successfully")
-            return response
+            try:
+                await client.post(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/vapi_logs",
+                    headers={
+                        "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                        "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                        "Content-Type": "application/json"
+                    },
+                    json=session_data
+                )
+            except Exception as log_error:
+                logger.warning(f"Failed to log session: {log_error}")
+            
+            logger.info(f"Successfully authenticated {user['name']} with {len(available_skills)} skills")
+            
+            # VAPI-compatible success response
+            return {
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": {
+                        "authorized": True,
+                        "user_id": user['id'],
+                        "user_name": user['name'],
+                        "first_name": first_name,
+                        "tenant_name": user['tenants']['name'],
+                        "phone_number": user['phone_number'],
+                        "greeting_message": greeting,
+                        "available_skills": available_skills,
+                        "skill_count": len(available_skills),
+                        "single_skill_mode": len(available_skills) == 1
+                    }
+                }]
+            }
             
     except Exception as e:
         logger.error(f"Authentication error: {e}")
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
+        # VAPI format for system error
         return {
-            "authorized": False,
-            "message": "System error during authentication. Please try again.",
-            "error": str(e),
-            "available_skills": []
+            "results": [{
+                "toolCallId": tool_call_id,
+                "result": {
+                    "authorized": False,
+                    "message": "Authentication system error"
+                }
+            }]
+        }
+            
+    except Exception as e:
+        logger.error(f"Authentication error: {e}")
+        # VAPI format for system error
+        return {
+            "results": [{
+                "toolCallId": tool_call_id,
+                "result": {
+                    "authorized": False,
+                    "message": "Authentication system error"
+                }
+            }]
         }
     
 async def log_vapi_interaction(vapi_call_id: str, interaction_type: str, 
