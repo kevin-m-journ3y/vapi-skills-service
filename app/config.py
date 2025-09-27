@@ -8,9 +8,10 @@ class Settings(BaseSettings):
     
     # AI Services
     claude_api_key: Optional[str] = None
+
     
     # VAPI
-    vapi_api_key: Optional[str] = None
+    AVPI_API_KEY: Optional[str] = None
     
     # App Settings
     environment: str = "development"
