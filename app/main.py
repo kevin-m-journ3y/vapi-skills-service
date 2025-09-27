@@ -291,7 +291,8 @@ async def check_environment():
         "supabase_service_key": "SET" if os.getenv('SUPABASE_SERVICE_KEY') else "NOT SET",
         "openai_api_key": "SET" if os.getenv('OPENAI_API_KEY') else "NOT SET",
         "google_service_account": "SET" if os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON') else "NOT SET",
-        "vapi_api_key": "SET" if os.getenv('VAPI_API_KEY') else "NOT SET",  # Add this line
+        "vapi_api_key": "SET" if os.getenv('VAPI_API_KEY') else "NOT SET",
+        "webhook_base_url": os.getenv('WEBHOOK_BASE_URL') or "NOT SET",
         "environment": os.getenv('ENVIRONMENT', 'NOT SET'),
         "python_path": os.getcwd()
     }
