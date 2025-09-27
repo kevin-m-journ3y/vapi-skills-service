@@ -7,13 +7,27 @@ from typing import List, Optional, Dict, Any
 import httpx
 import os
 from datetime import datetime
-from dotenv import load_dotenv  # Add this import
+from dotenv import load_dotenv
+import uuid
+from datetime import datetime, date
 import logging
+from app.vapi_voice_notes import VoiceNotesVAPISystem, add_voice_notes_management_endpoints
 
 # Load environment variables from .env file
 load_dotenv()
 
 app = FastAPI(title="Multi-Tenant Document RAG + VAPI Skills System", version="1.0.0")
+
+if os.getenv("VAPI_API_KEY"):
+    vapi_config = VAPIConfig(
+        api_key=os.getenv("VAPI_API_KEY"),
+        phone_number_id=os.getenv("VAPI_PHONE_NUMBER_ID")
+    )
+    voice_notes_system = VoiceNotesVAPISystem(
+        vapi_config, 
+        os.getenv("WEBHOOK_BASE_URL", "https://journ3y-vapi-skills-service.up.railway.app")
+    )
+    add_voice_notes_management_endpoints(app, voice_notes_system)
 
 # Add CORS middleware
 app.add_middleware(
@@ -32,6 +46,22 @@ logger = logging.getLogger(__name__)
 # ============================================
 # MODELS
 # ============================================
+
+
+class SiteValidationRequest(BaseModel):
+    site_description: str
+    vapi_call_id: str
+
+class SiteUpdateStoreRequest(BaseModel):
+    vapi_call_id: str
+    site_id: str
+    full_transcript: str
+    orders_delivered: Optional[str] = None
+    order_issues: Optional[str] = None
+    progress_issues: Optional[str] = None
+    general_updates: Optional[str] = None
+    summary_text: Optional[str] = None
+
 
 class VapiAuthRequest(BaseModel):
     caller_phone: str
@@ -350,10 +380,10 @@ async def authenticate_by_phone_only(request: PhoneAuthRequest):
                     skill = user_skill["skills"]
                     available_skills.append(SkillInfo(
                         skill_key=skill["skill_key"],
-                        skill_name=skill["name"],  # Changed from skill["skill_name"] to skill["name"]
-                        vapi_assistant_id=skill["vapi_assistant_id"],
-                        requires_entities=skill["requires_entities"],
-                        entity_type=skill["entity_type"]
+                        skill_name=skill["name"],
+                        vapi_assistant_id=skill.get("vapi_assistant_id"),  # Made optional
+                        requires_entities=skill.get("requires_entities", False),  # Default false
+                        entity_type=skill.get("entity_type")
                     ))
             
             # Log this authentication for session tracking
@@ -418,8 +448,8 @@ async def authenticate_by_phone_only(request: PhoneAuthRequest):
                     available_skills=available_skills,
                     primary_skill=skill,
                     single_skill_mode=True,
-                    greeting_message=f"Hi {user_first_name}! I can see you work for {company_name}. Would you like to {skill.skill_name.lower()} today?",
-                    next_assistant_id=skill.vapi_assistant_id,
+                    greeting_message=f"Hi {user_first_name}! I can see you work for {company_name}. You're authorized to record voice notes.",
+                    next_assistant_id=skill.vapi_assistant_id,  # May be None for voice_notes
                     session_context={
                         "user_id": user["id"],
                         "tenant_id": user["tenant_id"],
@@ -434,18 +464,21 @@ async def authenticate_by_phone_only(request: PhoneAuthRequest):
             
             return PhoneAuthResponse(
                 authorized=True,
-                session_type="multiple_skills", 
+                session_type="single_skill",
                 user_name=user["name"],
                 user_first_name=user_first_name,
                 user_role=user["role"],
                 company_name=company_name,
                 available_skills=available_skills,
-                single_skill_mode=False,
-                greeting_message=f"Hi {user_first_name}! I can see you work for {company_name}. I can help you with {skills_list}. What would you like to do today?",
+                primary_skill=skill,
+                single_skill_mode=True,
+                greeting_message=f"Hi {user_first_name}! I can see you work for {company_name}. Would you like to {skill.skill_name.lower()} today?",
+                next_assistant_id=skill.vapi_assistant_id,
                 session_context={
                     "user_id": user["id"],
-                    "tenant_id": user["tenant_id"], 
-                    "caller_phone": clean_phone
+                    "tenant_id": user["tenant_id"],
+                    "caller_phone": clean_phone,
+                    "primary_skill_key": skill.skill_key
                 }
             )
     
