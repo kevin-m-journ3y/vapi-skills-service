@@ -1027,7 +1027,7 @@ async def save_voice_note(request: dict):
                 "note_type": note_type,
                 "note_content": note_content,
                 "note_summary": note_summary,
-                "priority": priority,
+                #"priority": priority,
                 "full_transcript": f"Voice note: {note_content}"
             }
             
