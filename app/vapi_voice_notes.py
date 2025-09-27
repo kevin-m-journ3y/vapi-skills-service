@@ -103,8 +103,14 @@ TRANSFER: Always transfer to "Voice Notes Agent" for authorized voice_notes user
             "firstMessage": "Hello! This is Built by MK. Let me verify your access...",
             "firstMessageMode": "assistant-speaks-first"
         }
+
+        logger.info(f"Creating assistant with payload: {assistant_payload}")
         
         response = await self.client.post("/assistant", json=assistant_payload)
+
+        # Log the response details
+        logger.info(f"Assistant creation response: {response.status_code}")
+        logger.info(f"Assistant creation response body: {response.text}")
         response.raise_for_status()
         return response.json()
 
@@ -234,6 +240,15 @@ Be natural, conversational, and helpful. Let them speak without interruption.
                 }
             ]
         }
+
+        # Add debug logging
+        logger.info(f"Creating squad with config: {squad_config}")
+        
+        response = await self.client.post("/squad", json=squad_config)
+        
+        # Debug the response
+        logger.info(f"Squad creation response: {response.status_code}")
+        logger.info(f"Squad creation response body: {response.text}")
         
         response = await self.client.post("/squad", json=squad_config)
         response.raise_for_status()
@@ -269,11 +284,8 @@ Be natural, conversational, and helpful. Let them speak without interruption.
             squad = await self.create_voice_notes_squad(auth_agent_id, voice_notes_agent_id)
             squad_id = squad["id"]
             
-            # Attach phone number if provided
-            phone_setup = None
-            if self.vapi_config.phone_number_id:
-                logger.info(f"Attaching phone number {self.vapi_config.phone_number_id}...")
-                phone_setup = await self.attach_phone_number(squad_id, self.vapi_config.phone_number_id)
+            # Skip phone number attachment for testing
+            logger.info("Skipping phone number attachment for testing...")
             
             return {
                 "status": "success",
@@ -281,10 +293,11 @@ Be natural, conversational, and helpful. Let them speak without interruption.
                 "squad_id": squad_id,
                 "auth_agent_id": auth_agent_id,
                 "voice_notes_agent_id": voice_notes_agent_id,
-                "phone_number_id": self.vapi_config.phone_number_id,
-                "phone_setup": phone_setup,
+                "phone_number_id": None,
+                "phone_setup": "skipped_for_testing",
                 "webhook_base_url": self.webhook_base_url,
-                "voice_config": self.voice_config
+                "voice_config": self.voice_config,
+                "note": "You can attach a phone number later via VAPI dashboard"
             }
             
         except Exception as e:
