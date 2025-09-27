@@ -13,6 +13,7 @@ from datetime import datetime, date
 import logging
 from app.vapi_voice_notes import VoiceNotesVAPISystem, add_voice_notes_management_endpoints, VAPIConfig
 from app.vapi_tools_setup import VAPIToolsManager
+from app.vapi_utils import vapi_tool, extract_vapi_args
 
 # Load environment variables from .env file
 load_dotenv()
@@ -441,30 +442,12 @@ async def authenticate_vapi_caller(
 async def authenticate_by_phone(request: dict):
     """Authenticate caller - VAPI Server Tool format"""
     
+    tool_call_id, args = extract_vapi_args(request)
+    
     try:
-        # Log the full request
-        logger.info(f"Full VAPI request: {request}")
-        
-        # Extract arguments from VAPI structure
-        caller_phone = None
-        vapi_call_id = None
-        tool_call_id = None
-        
-        if "message" in request and "toolCalls" in request["message"]:
-            tool_calls = request["message"]["toolCalls"]
-            if len(tool_calls) > 0:
-                tool_call = tool_calls[0]
-                tool_call_id = tool_call.get("id")
-                
-                if "function" in tool_call and "arguments" in tool_call["function"]:
-                    arguments = tool_call["function"]["arguments"]
-                    caller_phone = arguments.get("caller_phone")
-                    vapi_call_id = arguments.get("vapi_call_id")
-        
-        # Fallback parsing
-        if not caller_phone:
-            caller_phone = request.get("caller_phone")
-            vapi_call_id = request.get("vapi_call_id", "unknown")
+        # Extract arguments with fallbacks
+        caller_phone = args.get("caller_phone")
+        vapi_call_id = args.get("vapi_call_id", "unknown")
         
         # TEST MODE fallback
         if not caller_phone or caller_phone.strip() == "":
@@ -490,7 +473,6 @@ async def authenticate_by_phone(request: dict):
             
             if response.status_code != 200:
                 logger.error(f"Supabase error: {response.status_code}")
-                # Try VAPI Server Tool response format
                 return {
                     "results": [{
                         "toolCallId": tool_call_id,
@@ -504,7 +486,6 @@ async def authenticate_by_phone(request: dict):
             users = response.json()
             if not users:
                 logger.info("No users found for phone number")
-                # Try VAPI Server Tool response format
                 return {
                     "results": [{
                         "toolCallId": tool_call_id,
@@ -517,6 +498,20 @@ async def authenticate_by_phone(request: dict):
             
             user = users[0]
             logger.info(f"Found user: {user}")
+            
+            # Log this authentication for session context
+            await log_vapi_interaction(
+                vapi_call_id=vapi_call_id,
+                interaction_type="authentication",
+                user_id=user['id'],
+                tenant_id=user['tenant_id'],
+                caller_phone=caller_phone,
+                details={
+                    "user_name": user['name'],
+                    "tenant_name": user['tenants']['name'],
+                    "auth_success": True
+                }
+            )
             
             # Get skills (your existing logic)
             skills_response = await client.get(
@@ -545,31 +540,21 @@ async def authenticate_by_phone(request: dict):
             
             # Generate greeting
             first_name = user['name'].split()[0] if user['name'] else "there"
-            skill_names = []
-            for skill in available_skills:
-                name = skill.get('skill_name', 'Unknown')
-                if name == 'Site Progress Updates':
-                    skill_names.append('Site Updates')
-                elif name == 'Document Search':
-                    skill_names.append('Document Search')
-                elif name == 'voice_notes':
-                    skill_names.append('Voice Notes')
-                else:
-                    skill_names.append(name)
             
-            if len(skill_names) == 1:
-                greeting = f"Hi {first_name}! Ready for {skill_names[0]}? Let me connect you right away."
-            elif len(skill_names) == 2:
-                greeting = f"Hi {first_name}! I can help you with {skill_names[0]} or {skill_names[1]}. What would you like to do today?"
+            if len(available_skills) == 1:
+                greeting = f"Hi {first_name}! Ready for voice notes? Let me connect you right away."
             else:
-                skills_text = ", ".join(skill_names[:-1]) + f", or {skill_names[-1]}"
-                greeting = f"Hi {first_name}! I can help you with {skills_text}. What would you like to do today?"
+                skill_names = [skill.get('skill_name', 'Unknown') for skill in available_skills]
+                if len(skill_names) == 2:
+                    greeting = f"Hi {first_name}! I can help you with {skill_names[0]} or {skill_names[1]}. What would you like to do?"
+                else:
+                    skills_text = ", ".join(skill_names[:-1]) + f", or {skill_names[-1]}"
+                    greeting = f"Hi {first_name}! I can help you with {skills_text}. What would you like to do?"
             
-            logger.info(f"Generated greeting: {greeting}")
             logger.info(f"Successfully authenticated {user['name']} with {len(available_skills)} skills")
             
-            # Try VAPI Server Tool response format (matching N8N structure)
-            response_data = {
+            # Return VAPI-compatible response
+            return {
                 "results": [{
                     "toolCallId": tool_call_id,
                     "result": {
@@ -587,17 +572,15 @@ async def authenticate_by_phone(request: dict):
                 }]
             }
             
-            logger.info(f"Returning response: {response_data}")
-            return response_data
-            
     except Exception as e:
         logger.error(f"Authentication error: {e}")
         return {
             "results": [{
-                "toolCallId": tool_call_id or "unknown",
+                "toolCallId": tool_call_id,
                 "result": {
                     "authorized": False,
-                    "message": "Authentication system error"
+                    "message": "Authentication system error",
+                    "error": str(e)
                 }
             }]
         }
@@ -605,7 +588,7 @@ async def authenticate_by_phone(request: dict):
 async def log_vapi_interaction(vapi_call_id: str, interaction_type: str, 
                              user_id: str = None, tenant_id: str = None,
                              caller_phone: str = None, details: dict = None):
-    """Log VAPI interactions for debugging and audit"""
+    """Log VAPI interactions for debugging and audit with improved error handling"""
     try:
         async with httpx.AsyncClient() as client:
             log_data = {
@@ -614,29 +597,35 @@ async def log_vapi_interaction(vapi_call_id: str, interaction_type: str,
                 "user_id": user_id,
                 "tenant_id": tenant_id,
                 "caller_phone": caller_phone,
-                "details": details or {},
+                "raw_log_data": details or {},
                 "created_at": datetime.utcnow().isoformat()
             }
             
-            await client.post(
+            response = await client.post(
                 f"{os.getenv('SUPABASE_URL')}/rest/v1/vapi_logs",
                 headers={
                     "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
                     "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal"
                 },
                 json=log_data
             )
+            
+            if response.status_code != 201:
+                logger.error(f"Failed to log VAPI interaction: {response.status_code} - {response.text}")
+                
     except Exception as e:
         logger.error(f"Failed to log VAPI interaction: {e}")
 
 
 # Helper function to get session context for voice notes endpoints
-async def get_session_context_by_call_id(vapi_call_id: str) -> dict:
-    """Get session context from VAPI call ID"""
+async def get_session_context_by_call_id(vapi_call_id: str) -> Optional[Dict]:
+    """
+    Get session context from vapi_logs using call ID with improved reliability
+    """
     try:
         async with httpx.AsyncClient() as client:
-            # Look up session in vapi_logs
             response = await client.get(
                 f"{os.getenv('SUPABASE_URL')}/rest/v1/vapi_logs",
                 headers={
@@ -646,35 +635,37 @@ async def get_session_context_by_call_id(vapi_call_id: str) -> dict:
                 params={
                     "vapi_call_id": f"eq.{vapi_call_id}",
                     "interaction_type": "eq.authentication",
-                    "select": "user_id,tenant_id,caller_phone,details",
-                    "order": "created_at.desc",
-                    "limit": "1"
+                    "select": "tenant_id,user_id,caller_phone,raw_log_data",
+                    "limit": "1",
+                    "order": "created_at.desc"
                 }
             )
             
-            if response.status_code == 200 and response.json():
-                log_entry = response.json()[0]
-                return {
-                    "user_id": log_entry["user_id"],
-                    "tenant_id": log_entry["tenant_id"],
-                    "caller_phone": log_entry["caller_phone"],
-                    "user_name": log_entry["details"].get("user_name"),
-                    "tenant_name": log_entry["details"].get("tenant_name")
-                }
-    except Exception as e:
-        logger.error(f"Failed to get session context: {e}")
+            if response.status_code == 200:
+                logs = response.json()
+                if logs:
+                    log_entry = logs[0]
+                    return {
+                        "tenant_id": log_entry["tenant_id"],
+                        "user_id": log_entry["user_id"],
+                        "caller_phone": log_entry["caller_phone"],
+                        "user_name": log_entry["raw_log_data"].get("user_name"),
+                        "tenant_name": log_entry["raw_log_data"].get("tenant_name")
+                    }
+            
+            logger.warning(f"No session context found for call ID: {vapi_call_id}")
+            return None
     
-    return {}
+    except Exception as e:
+        logger.error(f"Error getting session context for call {vapi_call_id}: {str(e)}")
+        return None
 
 # ============================================
 # ADD SESSION CONTEXT HELPER FUNCTION
 # ============================================
-
+"""
 async def get_session_context_by_call_id(vapi_call_id: str) -> Optional[Dict]:
-    """
-    Get session context from vapi_logs using call ID
-    Works with both bearer token and phone-only authentication
-    """
+    
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -700,209 +691,258 @@ async def get_session_context_by_call_id(vapi_call_id: str) -> Optional[Dict]:
     except Exception as e:
         logger.error(f"Error getting session context for call {vapi_call_id}: {str(e)}")
         return None
+"""
 
 # ============================================
 # ADD VOICE NOTES SKILL ENDPOINTS
 # ============================================
 
 @app.post("/api/v1/skills/voice-notes/identify-context")
-async def identify_voice_note_context(request: VoiceNoteContextRequest):
+async def identify_voice_note_context(request: dict):
     """
     Identify if this is a site-specific note and validate the site if needed
-    Uses session context from phone-only authentication (no bearer token needed)
+    VAPI-compatible version handling format manually
     """
-    note_type = request.note_type
-    site_description = request.site_description or ""
-    vapi_call_id = request.vapi_call_id
-    
     try:
+        # Extract VAPI arguments manually
+        tool_call_id = "unknown"
+        args = {}
+        
+        if "message" in request and "toolCalls" in request["message"]:
+            tool_calls = request["message"]["toolCalls"]
+            if len(tool_calls) > 0:
+                tool_call = tool_calls[0]
+                tool_call_id = tool_call.get("id", "unknown")
+                args = tool_call["function"]["arguments"]
+        else:
+            args = request
+        
+        user_input = args.get("user_input", "")
+        vapi_call_id = args.get("vapi_call_id", "unknown")
+        
         # Get session context from previous authentication
         session_context = await get_session_context_by_call_id(vapi_call_id)
         
         if not session_context:
-            return {"context_identified": False, "error": "Call session not found. Please try calling again."}
-        
-        tenant_id = session_context["tenant_id"]
-        
-        async with httpx.AsyncClient() as client:
-            # Get company name for better user experience
-            company_response = await client.get(
-                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenants",
-                headers={
-                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
-                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
-                },
-                params={
-                    "id": f"eq.{tenant_id}",
-                    "select": "name"
-                }
-            )
+            result = {
+                "context_identified": False, 
+                "error": "Call session not found. Please try calling again.",
+                "message": "I couldn't find your call session. Please try calling again."
+            }
+        else:
+            tenant_id = session_context["tenant_id"]
             
-            company_name = "your company"
-            if company_response.status_code == 200:
-                company_data = company_response.json()
-                if company_data:
-                    company_name = company_data[0]["name"]
-            
-            if note_type == "general":
-                return {
-                    "context_identified": True,
-                    "note_type": "general",
-                    "message": f"I'll record a general note for {company_name}.",
-                    "company_name": company_name,
-                    "site_id": None
-                }
-            
-            elif note_type == "site_specific":
-                if not site_description:
-                    return {
-                        "context_identified": False,
-                        "error": "Site description required for site-specific notes"
-                    }
-                
-                # Get available sites (entities) for this company
-                sites_response = await client.get(
-                    f"{os.getenv('SUPABASE_URL')}/rest/v1/entities",
+            async with httpx.AsyncClient() as client:
+                # Get company name for better user experience
+                company_response = await client.get(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/tenants",
                     headers={
                         "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
                         "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
                     },
                     params={
-                        "tenant_id": f"eq.{tenant_id}",
-                        "entity_type": "eq.sites",
-                        "is_active": "eq.true",
-                        "select": "id,name,identifier,address"
+                        "id": f"eq.{tenant_id}",
+                        "select": "name"
                     }
                 )
                 
-                if sites_response.status_code != 200:
-                    return {"context_identified": False, "error": f"Unable to fetch {company_name} sites"}
+                company_name = "your company"
+                if company_response.status_code == 200:
+                    company_data = company_response.json()
+                    if company_data:
+                        company_name = company_data[0]["name"]
                 
-                sites = sites_response.json()
+                # Simple heuristic to determine note type from user input
+                site_keywords = ["site", "project", "construction", "building", "house", "office"]
+                is_site_specific = any(keyword in user_input.lower() for keyword in site_keywords)
                 
-                if not sites:
-                    return {
-                        "context_identified": False,
-                        "error": f"No active sites found for {company_name}. I can record this as a general note instead."
+                if not is_site_specific:
+                    result = {
+                        "context_identified": True,
+                        "note_type": "general",
+                        "message": f"I'll record a general note for {company_name}.",
+                        "company_name": company_name,
+                        "site_id": None
                     }
-                
-                # Create a detailed prompt with actual entity data
-                site_options = []
-                for site in sites:
-                    site_info = {
-                        "id": site["id"],
-                        "name": site["name"],
-                        "identifier": site.get("identifier", ""),
-                        "address": site.get("address", "")
-                    }
-                    site_options.append(site_info)
-                
-                # Create prompt with actual site IDs and names
-                site_list = "\n".join([
-                    f"- ID: {site['id']}, Name: {site['name']}, Identifier: {site.get('identifier', 'None')}, Address: {site.get('address', 'None')}"
-                    for site in sites
-                ])
-                
-                prompt = f"""
-                Available construction sites for {company_name}:
-                {site_list}
-
-                User said: "{site_description}"
-
-                Which site are they referring to? You MUST use the exact ID from the list above. Return JSON only:
-                {{
-                  "site_found": true/false,
-                  "site_id": "exact UUID from the ID field above if found, null if not found",
-                  "site_name": "exact name if found",
-                  "confidence": "high/medium/low"
-                }}
-
-                IMPORTANT: The site_id MUST be the exact UUID from the ID field, not a shortened version.
-                """
-                
-                # Call OpenAI API for site matching
-                openai_response = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": "gpt-3.5-turbo",
-                        "max_tokens": 500,
-                        "messages": [{"role": "user", "content": prompt}]
-                    }
-                )
-                                
-                if openai_response.status_code != 200:
-                    logger.error(f"OpenAI API error: {openai_response.status_code} - {openai_response.text}")
-                    return {"context_identified": False, "error": f"AI site matching service unavailable"}
-                
-                # Parse OpenAI response
-                openai_result = openai_response.json()
-                site_match_text = openai_result["choices"][0]["message"]["content"]
-                
-                # Parse JSON from OpenAI response
-                import json
-                try:
-                    site_match = json.loads(site_match_text)
-                except json.JSONDecodeError as e:
-                    logger.error(f"JSON parsing error: {e}. Response was: {site_match_text}")
-                    return {"context_identified": False, "error": "Unable to process site description"}
-                
-                # Validate that the returned site_id actually exists in our database
-                if site_match.get("site_found"):
-                    matched_site_id = site_match["site_id"]
+                else:
+                    # If potentially site-specific, get available sites
+                    sites_response = await client.get(
+                        f"{os.getenv('SUPABASE_URL')}/rest/v1/entities",
+                        headers={
+                            "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                            "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                        },
+                        params={
+                            "tenant_id": f"eq.{tenant_id}",
+                            "entity_type": "eq.sites",
+                            "is_active": "eq.true",
+                            "select": "id,name,identifier,address"
+                        }
+                    )
                     
-                    # Double-check the site ID exists in our entities
-                    matching_site = next((site for site in sites if site["id"] == matched_site_id), None)
-                    
-                    if matching_site:
-                        return {
+                    if sites_response.status_code != 200 or not sites_response.json():
+                        result = {
                             "context_identified": True,
-                            "note_type": "site_specific",
-                            "site_id": matching_site["id"],  # Proper UUID
-                            "site_name": matching_site["name"],
-                            "site_identifier": matching_site.get("identifier"),
-                            "site_address": matching_site.get("address"),
-                            "message": f"I'll record a note for {matching_site['name']} at {company_name}.",
-                            "company_name": company_name
+                            "note_type": "general",
+                            "message": f"I'll record a general note for {company_name}. No active sites found.",
+                            "company_name": company_name,
+                            "site_id": None
                         }
                     else:
-                        logger.error(f"OpenAI returned invalid site_id: {matched_site_id}")
-                        # Fall through to error case
-                
-                # Site not found or invalid ID returned
-                available_sites_text = ", ".join([f"{site['name']} ({site.get('identifier', '')})" for site in sites])
-                return {
-                    "context_identified": False,
-                    "available_sites": available_sites_text,
-                    "error": f"I couldn't identify that site. Available {company_name} sites are: {available_sites_text}. You can also record this as a general note."
-                }
-    
+                        sites = sites_response.json()
+                        
+                        # Use OpenAI to match user input to available sites
+                        site_list = "\n".join([
+                            f"- ID: {site['id']}, Name: {site['name']}, Identifier: {site.get('identifier', 'None')}, Address: {site.get('address', 'None')}"
+                            for site in sites
+                        ])
+                        
+                        prompt = f"""
+                        Available construction sites for {company_name}:
+                        {site_list}
+
+                        User said: "{user_input}"
+
+                        Which site are they referring to? You MUST use the exact ID from the list above. Return JSON only:
+                        {{
+                          "site_found": true/false,
+                          "site_id": "exact UUID from the ID field above if found, null if not found",
+                          "site_name": "exact name if found",
+                          "confidence": "high/medium/low"
+                        }}
+
+                        IMPORTANT: The site_id MUST be the exact UUID from the ID field, not a shortened version.
+                        """
+                        
+                        # Call OpenAI API for site matching
+                        openai_response = await client.post(
+                            "https://api.openai.com/v1/chat/completions",
+                            headers={
+                                "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
+                                "Content-Type": "application/json"
+                            },
+                            json={
+                                "model": "gpt-3.5-turbo",
+                                "max_tokens": 500,
+                                "messages": [{"role": "user", "content": prompt}]
+                            }
+                        )
+                                        
+                        if openai_response.status_code != 200:
+                            logger.error(f"OpenAI API error: {openai_response.status_code} - {openai_response.text}")
+                            result = {
+                                "context_identified": True,
+                                "note_type": "general",
+                                "message": f"I'll record a general note for {company_name}. AI site matching unavailable.",
+                                "company_name": company_name,
+                                "site_id": None
+                            }
+                        else:
+                            # Parse OpenAI response
+                            openai_result = openai_response.json()
+                            site_match_text = openai_result["choices"][0]["message"]["content"]
+                            
+                            # Parse JSON from OpenAI response
+                            import json
+                            try:
+                                site_match = json.loads(site_match_text)
+                            except json.JSONDecodeError as e:
+                                logger.error(f"JSON parsing error: {e}. Response was: {site_match_text}")
+                                result = {
+                                    "context_identified": True,
+                                    "note_type": "general",
+                                    "message": f"I'll record a general note for {company_name}.",
+                                    "company_name": company_name,
+                                    "site_id": None
+                                }
+                            else:
+                                # Validate that the returned site_id actually exists
+                                if site_match.get("site_found"):
+                                    matched_site_id = site_match["site_id"]
+                                    matching_site = next((site for site in sites if site["id"] == matched_site_id), None)
+                                    
+                                    if matching_site:
+                                        result = {
+                                            "context_identified": True,
+                                            "note_type": "site_specific",
+                                            "site_id": matching_site["id"],
+                                            "site_name": matching_site["name"],
+                                            "site_identifier": matching_site.get("identifier"),
+                                            "site_address": matching_site.get("address"),
+                                            "message": f"I'll record a note for {matching_site['name']} at {company_name}.",
+                                            "company_name": company_name
+                                        }
+                                    else:
+                                        result = {
+                                            "context_identified": True,
+                                            "note_type": "general",
+                                            "message": f"I'll record a general note for {company_name}.",
+                                            "company_name": company_name,
+                                            "site_id": None
+                                        }
+                                else:
+                                    # Site not found - default to general
+                                    result = {
+                                        "context_identified": True,
+                                        "note_type": "general",
+                                        "message": f"I'll record a general note for {company_name}.",
+                                        "company_name": company_name,
+                                        "site_id": None
+                                    }
+        
+        # Return VAPI format
+        return {
+            "results": [{
+                "toolCallId": tool_call_id,
+                "result": result
+            }]
+        }
+        
     except Exception as e:
         logger.error(f"Context identification error: {str(e)}")
-        return {"context_identified": False, "error": f"System error: {str(e)}"}
+        return {
+            "results": [{
+                "toolCallId": "unknown",
+                "result": {
+                    "context_identified": False, 
+                    "error": f"System error: {str(e)}",
+                    "message": "I'm having trouble processing that. Let me record this as a general note."
+                }
+            }]
+        }
+
 
 
 @app.post("/api/v1/skills/voice-notes/save-note")
-async def save_voice_note(request: VoiceNoteSaveRequest):
+@vapi_tool
+async def save_voice_note(args: dict):
     """
-    Save a voice note (either site-specific or general) with company context from phone-only auth
+    Save a voice note (either site-specific or general) with company context
+    VAPI-compatible version using decorator
     """
     try:
-        vapi_call_id = request.vapi_call_id
-        note_content = request.note_content
-        note_summary = request.note_summary or ""
-        note_type = request.note_type
-        site_id = request.site_id
-        full_transcript = request.full_transcript
+        vapi_call_id = args.get("vapi_call_id", "unknown")
+        note_content = args.get("note_text", "")
+        note_type = args.get("note_type", "general")
+        site_id = args.get("site_id")
+        priority = args.get("priority", "medium")
+        
+        if not note_content:
+            return {
+                "success": False, 
+                "error": "Note content is required",
+                "message": "I didn't receive any note content to save."
+            }
         
         # Get session context from previous authentication
         session_context = await get_session_context_by_call_id(vapi_call_id)
         
         if not session_context:
-            return {"success": False, "error": "Call session not found. Please try calling again."}
+            return {
+                "success": False, 
+                "error": "Call session not found",
+                "message": "I couldn't find your call session. Please try calling again."
+            }
         
         tenant_id = session_context["tenant_id"]
         user_id = session_context["user_id"]
@@ -957,9 +997,12 @@ async def save_voice_note(request: VoiceNoteSaveRequest):
             import uuid
             note_id = str(uuid.uuid4())
             
+            # Create note summary (first 100 chars)
+            note_summary = note_content[:100] + "..." if len(note_content) > 100 else note_content
+            
             # Store in voice_notes table
             voice_note_data = {
-                "id": note_id,  # Explicitly set ID
+                "id": note_id,
                 "tenant_id": tenant_id,
                 "user_id": user_id,
                 "site_id": site_id,
@@ -968,7 +1011,8 @@ async def save_voice_note(request: VoiceNoteSaveRequest):
                 "note_type": note_type,
                 "note_content": note_content,
                 "note_summary": note_summary,
-                "full_transcript": full_transcript
+                "priority": priority,
+                "full_transcript": f"Voice note: {note_content}"
             }
             
             store_response = await client.post(
@@ -977,7 +1021,7 @@ async def save_voice_note(request: VoiceNoteSaveRequest):
                     "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
                     "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
                     "Content-Type": "application/json",
-                    "Prefer": "return=minimal"  # Don't expect response body
+                    "Prefer": "return=minimal"
                 },
                 json=voice_note_data
             )
@@ -988,19 +1032,27 @@ async def save_voice_note(request: VoiceNoteSaveRequest):
                 
                 return {
                     "success": True,
-                    "message": f"Voice note saved successfully{note_location}",
                     "note_id": note_id,
+                    "message": f"Perfect! I've saved your voice note{note_location}.",
                     "company_name": company_name,
                     "site_name": site_name,
                     "note_type": note_type
                 }
             else:
                 logger.error(f"Failed to store voice note: {store_response.status_code} - {store_response.text}")
-                return {"success": False, "error": f"Database error: {store_response.status_code}"}
+                return {
+                    "success": False, 
+                    "error": f"Database error: {store_response.status_code}",
+                    "message": "I'm having trouble saving your note. Please try again."
+                }
     
     except Exception as e:
         logger.error(f"Voice note storage error: {str(e)}")
-        return {"success": False, "error": f"Storage error: {str(e)}"}
+        return {
+            "success": False, 
+            "error": f"Storage error: {str(e)}",
+            "message": "I'm having trouble saving your note. Please try again."
+        }
     
 
 @app.get("/api/v1/skills/voice-notes/get-notes")
