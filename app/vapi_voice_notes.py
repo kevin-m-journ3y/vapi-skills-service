@@ -3,10 +3,20 @@ import httpx
 import json
 import logging
 from typing import Dict, Any, Optional
+from pydantic import BaseModel
 import os
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+class VAPIConfig(BaseModel):
+    """Configuration for VAPI voice notes system"""
+    api_key: str
+    webhook_base_url: str
+    phone_number_id: Optional[str] = None
+    
+    class Config:
+        env_prefix = "VAPI_"
 
 class VoiceNotesVAPISystem:
     def __init__(self):
@@ -32,16 +42,16 @@ class VoiceNotesVAPISystem:
                         "role": "system",
                         "content": """You are the Built by MK authentication assistant.
 
-                        Your job:
-                        1. Answer with a warm greeting: "Hello! This is Built by MK. Let me verify your access..."
-                        2. IMMEDIATELY call authenticate_caller with the caller's phone number
-                        3. Based on the response:
-                        - If authorized for voice_notes: Say "Perfect! I can see you're authorized to record voice notes. Let me connect you to our voice notes system right away." Then transfer to "Voice Notes Agent"
-                        - If not authorized: Say "I'm sorry, this number isn't authorized for voice notes. Please contact Built by MK administration."
+                Your job:
+                1. Answer with a warm greeting: "Hello! This is Built by MK. Let me verify your access..."
+                2. IMMEDIATELY call authenticate_caller with the caller's phone number
+                3. Based on the response:
+                - If authorized for voice_notes: Say "Perfect! I can see you're authorized to record voice notes. Let me connect you to our voice notes system right away." Then transfer to "Voice Notes Agent"
+                - If not authorized: Say "I'm sorry, this number isn't authorized for voice notes. Please contact Built by MK administration."
 
-                        Keep it brief, warm, and professional. Make the transition feel seamless.
+                Keep it brief, warm, and professional. Make the transition feel seamless.
 
-                        TRANSFER: Always transfer to "Voice Notes Agent" for authorized voice_notes users."""
+                TRANSFER: Always transfer to "Voice Notes Agent" for authorized voice_notes users."""
                     }
                 ],
                 "tools": [
@@ -328,3 +338,128 @@ async def get_vapi_system() -> VoiceNotesVAPISystem:
     if _vapi_system_instance is None:
         _vapi_system_instance = VoiceNotesVAPISystem()
     return _vapi_system_instance
+
+
+def add_voice_notes_management_endpoints(app):
+    """Add VAPI voice notes management endpoints to FastAPI app"""
+    
+    @app.post("/api/v1/vapi/setup-voice-notes")
+    async def setup_voice_notes():
+        """Setup the complete VAPI voice notes system"""
+        try:
+            result = await setup_voice_notes_system()
+            return result
+        except Exception as e:
+            logger.error(f"Setup failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    @app.post("/api/v1/vapi/attach-phone")
+    async def attach_phone_to_squad(request: dict):
+        """Attach a phone number to the voice notes squad"""
+        try:
+            phone_number_id = request["phone_number_id"]
+            squad_id = request["squad_id"]
+            
+            system = await get_vapi_system()
+            
+            # Attach phone number to squad
+            async with httpx.AsyncClient() as client:
+                response = await client.patch(
+                    f"{system.base_url}/phone-number/{phone_number_id}",
+                    headers=system.headers,
+                    json={"assistantId": squad_id}
+                )
+                
+                if response.status_code == 200:
+                    return {
+                        "success": True,
+                        "message": f"Phone number {phone_number_id} attached to squad {squad_id}"
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Failed to attach phone: {response.status_code} - {response.text}"
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Phone attachment failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    @app.get("/api/v1/vapi/status")
+    async def get_vapi_status():
+        """Get status of VAPI system components"""
+        try:
+            system = await get_vapi_system()
+            
+            # Check if we can access VAPI API
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{system.base_url}/assistant",
+                    headers=system.headers
+                )
+                
+                if response.status_code == 200:
+                    assistants = response.json()
+                    bmk_assistants = [a for a in assistants if "Built by MK" in a.get("name", "")]
+                    
+                    return {
+                        "success": True,
+                        "vapi_connected": True,
+                        "bmk_assistants": len(bmk_assistants),
+                        "total_assistants": len(assistants),
+                        "webhook_base": system.webhook_base
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "vapi_connected": False,
+                        "error": f"VAPI API error: {response.status_code}"
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Status check failed: {e}")
+            return {
+                "success": False,
+                "vapi_connected": False,
+                "error": str(e)
+            }
+
+    @app.delete("/api/v1/vapi/cleanup")
+    async def cleanup_vapi_assistants():
+        """Clean up Built by MK VAPI assistants (for testing)"""
+        try:
+            system = await get_vapi_system()
+            
+            async with httpx.AsyncClient() as client:
+                # Get all assistants
+                response = await client.get(
+                    f"{system.base_url}/assistant",
+                    headers=system.headers
+                )
+                
+                if response.status_code == 200:
+                    assistants = response.json()
+                    bmk_assistants = [a for a in assistants if "Built by MK" in a.get("name", "")]
+                    
+                    deleted_count = 0
+                    for assistant in bmk_assistants:
+                        delete_response = await client.delete(
+                            f"{system.base_url}/assistant/{assistant['id']}",
+                            headers=system.headers
+                        )
+                        if delete_response.status_code == 200:
+                            deleted_count += 1
+                    
+                    return {
+                        "success": True,
+                        "message": f"Deleted {deleted_count} Built by MK assistants"
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Failed to fetch assistants: {response.status_code}"
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Cleanup failed: {e}")
+            return {"success": False, "error": str(e)}
