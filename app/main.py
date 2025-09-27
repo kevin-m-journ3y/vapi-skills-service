@@ -585,7 +585,7 @@ async def authenticate_by_phone(request: dict):
             }]
         }
     
-async def log_vapi_interaction(vapi_call_id: str, interaction_type: str, 
+async def log_vapi_interaction(vapi_call_id: str, interaction_type: str = None, 
                              user_id: str = None, tenant_id: str = None,
                              caller_phone: str = None, details: dict = None):
     """Log VAPI interactions for debugging and audit with improved error handling"""
@@ -593,13 +593,16 @@ async def log_vapi_interaction(vapi_call_id: str, interaction_type: str,
         async with httpx.AsyncClient() as client:
             log_data = {
                 "vapi_call_id": vapi_call_id,
-                "interaction_type": interaction_type,
                 "user_id": user_id,
                 "tenant_id": tenant_id,
                 "caller_phone": caller_phone,
                 "raw_log_data": details or {},
                 "created_at": datetime.utcnow().isoformat()
             }
+            
+            # Only add interaction_type if the column exists
+            if interaction_type:
+                log_data["interaction_type"] = interaction_type
             
             response = await client.post(
                 f"{os.getenv('SUPABASE_URL')}/rest/v1/vapi_logs",
