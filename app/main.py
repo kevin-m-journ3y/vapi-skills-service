@@ -915,11 +915,24 @@ async def identify_voice_note_context(request: dict):
 
 @app.post("/api/v1/skills/voice-notes/save-note")
 @vapi_tool
-async def save_voice_note(args: dict):
+async def save_voice_note(request: dict):
     """
     Save a voice note (either site-specific or general) with company context
     VAPI-compatible version using decorator
     """
+
+    tool_call_id = "unknown"
+    args = {}
+    
+    if "message" in request and "toolCalls" in request["message"]:
+        tool_calls = request["message"]["toolCalls"]
+        if len(tool_calls) > 0:
+            tool_call = tool_calls[0]
+            tool_call_id = tool_call.get("id", "unknown")
+            args = tool_call["function"]["arguments"]
+    else:
+        args = request
+
     try:
         vapi_call_id = args.get("vapi_call_id", "unknown")
         note_content = args.get("note_text", "")
@@ -1031,12 +1044,17 @@ async def save_voice_note(args: dict):
                 logger.info(f"Voice note saved for {company_name}{note_location}: {vapi_call_id}")
                 
                 return {
-                    "success": True,
-                    "note_id": note_id,
-                    "message": f"Perfect! I've saved your voice note{note_location}.",
-                    "company_name": company_name,
-                    "site_name": site_name,
-                    "note_type": note_type
+                    "results": [{
+                        "toolCallId": tool_call_id,
+                        "result":{
+                            "success": True,
+                            "note_id": note_id,
+                            "message": f"Perfect! I've saved your voice note{note_location}.",
+                            "company_name": company_name,
+                            "site_name": site_name,
+                            "note_type": note_type
+                        }
+                    }]
                 }
             else:
                 logger.error(f"Failed to store voice note: {store_response.status_code} - {store_response.text}")
@@ -1049,9 +1067,14 @@ async def save_voice_note(args: dict):
     except Exception as e:
         logger.error(f"Voice note storage error: {str(e)}")
         return {
-            "success": False, 
-            "error": f"Storage error: {str(e)}",
-            "message": "I'm having trouble saving your note. Please try again."
+            "results": [{
+                "toolCallId": tool_call_id,
+                "result": {
+                    "success": False, 
+                    "error": f"Storage error: {str(e)}",
+                    "message": "I'm having trouble saving your note. Please try again."
+                }
+            }]
         }
     
 
