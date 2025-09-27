@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 import uuid
 from datetime import datetime, date
 import logging
+import json
 from app.vapi_voice_notes import VoiceNotesVAPISystem, add_voice_notes_management_endpoints, VAPIConfig
 from app.vapi_tools_setup import VAPIToolsManager
 from app.vapi_utils import vapi_tool, extract_vapi_args
@@ -931,11 +932,31 @@ async def save_voice_note(request: dict):
     VAPI-compatible version using decorator
     """
 
+    # DEBUG: Log the full request structure
+    logger.info(f"=== FULL VAPI REQUEST ===")
+    logger.info(f"{json.dumps(request, indent=2)}")
+    logger.info(f"=== END REQUEST ===")
+
+    logger.info(f"Full VAPI request structure: {json.dumps(request, indent=2)}")
+
     # Extract call ID from VAPI request structure
     vapi_call_id = None
+
+    # Method 1: Check if call ID is in message.call
     if "message" in request and "call" in request["message"]:
         vapi_call_id = request["message"]["call"]["id"]
-        logger.info(f"Extracted real call ID from VAPI request: {vapi_call_id}")
+        logger.info(f"Method 1 - Found call ID in message.call: {vapi_call_id}")
+    
+    # Method 2: Check if call ID is at root level
+    if not vapi_call_id and "call" in request:
+        vapi_call_id = request["call"]["id"]
+        logger.info(f"Method 2 - Found call ID at root: {vapi_call_id}")
+    
+    # Method 3: Check other possible locations
+    if not vapi_call_id:
+        logger.info(f"Available keys in request: {list(request.keys())}")
+        if "message" in request:
+            logger.info(f"Available keys in message: {list(request['message'].keys())}")
 
     tool_call_id = "unknown"
     args = {}
@@ -956,6 +977,11 @@ async def save_voice_note(request: dict):
         note_type = args.get("note_type", "general")
         site_id = args.get("site_id")
         priority = args.get("priority", "medium")
+
+        # Use tool_call_id as a fallback identifier
+        if not vapi_call_id:
+            vapi_call_id = tool_call_id
+            logger.info(f"Using tool_call_id as call identifier: {vapi_call_id}")
         
         if not note_content:
             return {
