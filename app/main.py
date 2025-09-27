@@ -442,12 +442,19 @@ async def authenticate_vapi_caller(
 async def authenticate_by_phone(request: dict):
     """Authenticate caller - VAPI Server Tool format"""
     
+    # Extract call ID from VAPI request structure
+    vapi_call_id = None
+    if "message" in request and "call" in request["message"]:
+        vapi_call_id = request["message"]["call"]["id"]
+    
     tool_call_id, args = extract_vapi_args(request)
     
     try:
         # Extract arguments with fallbacks
         caller_phone = args.get("caller_phone")
-        vapi_call_id = args.get("vapi_call_id", "unknown")
+        
+        if not vapi_call_id:
+            vapi_call_id = args.get("vapi_call_id", "unknown")
         
         # TEST MODE fallback
         if not caller_phone or caller_phone.strip() == "":
