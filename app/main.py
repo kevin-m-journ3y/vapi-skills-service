@@ -8,6 +8,7 @@ import httpx
 import os
 from datetime import datetime
 from dotenv import load_dotenv  # Add this import
+import logging
 
 # Load environment variables from .env file
 load_dotenv()
@@ -22,6 +23,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 # ============================================
 # MODELS
@@ -88,6 +94,38 @@ class VapiLogRequest(BaseModel):
     status: str = 'completed'
     duration_seconds: Optional[int] = None
     raw_log_data: Dict = {}
+
+class PhoneAuthRequest(BaseModel):
+    caller_phone: str
+    vapi_call_id: str
+
+class PhoneAuthResponse(BaseModel):
+    authorized: bool
+    session_type: Optional[str] = None
+    user_name: Optional[str] = None
+    user_first_name: Optional[str] = None
+    user_role: Optional[str] = None
+    company_name: Optional[str] = None
+    available_skills: List[SkillInfo] = []
+    primary_skill: Optional[SkillInfo] = None
+    single_skill_mode: bool = False
+    greeting_message: str = ""
+    next_assistant_id: Optional[str] = None
+    session_context: Dict[str, Any] = {}
+    message: Optional[str] = None
+
+class VoiceNoteContextRequest(BaseModel):
+    note_type: str  # 'general' or 'site_specific'
+    site_description: Optional[str] = None
+    vapi_call_id: str
+
+class VoiceNoteSaveRequest(BaseModel):
+    vapi_call_id: str
+    site_id: Optional[str] = None
+    note_content: str
+    note_summary: Optional[str] = None
+    note_type: str
+    full_transcript: str
 
 # ============================================
 # ENVIRONMENT CHECK ENDPOINT
@@ -236,6 +274,685 @@ async def authenticate_vapi_caller(
             error=f"System error: {str(e)}",
             greeting_message="I'm experiencing technical difficulties. Please try again later."
         )
+    
+
+# ============================================
+# ADD PHONE-ONLY AUTHENTICATION ENDPOINT
+# ============================================
+
+@app.post("/api/v1/vapi/authenticate-by-phone", response_model=PhoneAuthResponse)
+async def authenticate_by_phone_only(request: PhoneAuthRequest):
+    """
+    Authenticate caller using only phone number - determines company and skills automatically
+    This works alongside the existing bearer token authentication
+    """
+    caller_phone = request.caller_phone
+    vapi_call_id = request.vapi_call_id
+    
+    try:
+        # Clean phone number (remove spaces, standardize format)
+        clean_phone = caller_phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+        
+        async with httpx.AsyncClient() as client:
+            # Find user by phone number across all companies
+            user_response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/users",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={
+                    "phone_number": f"eq.{clean_phone}",
+                    "is_active": "eq.true",
+                    "can_call": "eq.true",
+                    "select": "id,name,role,tenant_id,phone_number,tenants!inner(id,name,slug)"
+                }
+            )
+            
+            if user_response.status_code != 200:
+                logger.error(f"Database error during phone authentication: {user_response.text}")
+                return PhoneAuthResponse(
+                    authorized=False,
+                    message="System error during authentication. Please try again."
+                )
+            
+            users = user_response.json()
+            
+            if not users:
+                logger.warning(f"Unauthorized call attempt from {caller_phone}")
+                return PhoneAuthResponse(
+                    authorized=False,
+                    message=f"Phone number {caller_phone} is not authorized. Please contact your administrator."
+                )
+            
+            # Take the first user if multiple (shouldn't happen with proper data)
+            user = users[0]
+            tenant = user["tenants"]
+            
+            # Get user's available skills
+            skills_response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/user_skills",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={
+                    "user_id": f"eq.{user['id']}",
+                    "is_enabled": "eq.true",
+                    "select": "skill_id,skills!inner(skill_key,name,vapi_assistant_id,requires_entities,entity_type)"
+                }
+            )
+            
+            available_skills = []
+            if skills_response.status_code == 200:
+                user_skills = skills_response.json()
+                for user_skill in user_skills:
+                    skill = user_skill["skills"]
+                    available_skills.append(SkillInfo(
+                        skill_key=skill["skill_key"],
+                        skill_name=skill["name"],  # Changed from skill["skill_name"] to skill["name"]
+                        vapi_assistant_id=skill["vapi_assistant_id"],
+                        requires_entities=skill["requires_entities"],
+                        entity_type=skill["entity_type"]
+                    ))
+            
+            # Log this authentication for session tracking
+            log_data = {
+                "vapi_call_id": vapi_call_id,
+                "tenant_id": user["tenant_id"],
+                "user_id": user["id"],
+                "caller_phone": clean_phone,
+                "skill_key": "authentication",
+                "session_type": "internal_user",
+                "status": "completed",
+                "raw_log_data": {
+                    "user_name": user["name"],
+                    "company_name": tenant["name"],
+                    "available_skills": [skill.skill_key for skill in available_skills],
+                    "authentication_method": "phone_only"
+                }
+            }
+            
+            # Store in vapi_logs for session tracking
+            await client.post(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/vapi_logs",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                    "Content-Type": "application/json"
+                },
+                json=log_data
+            )
+            
+            # Determine response based on available skills
+            user_first_name = user["name"].split()[0]
+            company_name = tenant["name"]
+            
+            if not available_skills:
+                logger.warning(f"User {user['name']} ({caller_phone}) has no enabled skills")
+                return PhoneAuthResponse(
+                    authorized=True,
+                    session_type="no_skills",
+                    user_name=user["name"],
+                    user_first_name=user_first_name,
+                    company_name=company_name,
+                    message=f"Hi {user_first_name}! I can see you work for {company_name}, but you don't have any active capabilities. Please contact your administrator.",
+                    available_skills=[],
+                    session_context={
+                        "user_id": user["id"],
+                        "tenant_id": user["tenant_id"],
+                        "caller_phone": clean_phone
+                    }
+                )
+            
+            # Single skill mode (most common)
+            if len(available_skills) == 1:
+                skill = available_skills[0]
+                return PhoneAuthResponse(
+                    authorized=True,
+                    session_type="single_skill",
+                    user_name=user["name"],
+                    user_first_name=user_first_name,
+                    user_role=user["role"],
+                    company_name=company_name,
+                    available_skills=available_skills,
+                    primary_skill=skill,
+                    single_skill_mode=True,
+                    greeting_message=f"Hi {user_first_name}! I can see you work for {company_name}. Would you like to {skill.skill_name.lower()} today?",
+                    next_assistant_id=skill.vapi_assistant_id,
+                    session_context={
+                        "user_id": user["id"],
+                        "tenant_id": user["tenant_id"],
+                        "caller_phone": clean_phone,
+                        "primary_skill_key": skill.skill_key
+                    }
+                )
+            
+            # Multiple skills - offer menu
+            skill_names = [skill.skill_name.lower() for skill in available_skills]
+            skills_list = ", ".join(skill_names[:-1]) + f" or {skill_names[-1]}" if len(skill_names) > 1 else skill_names[0]
+            
+            return PhoneAuthResponse(
+                authorized=True,
+                session_type="multiple_skills", 
+                user_name=user["name"],
+                user_first_name=user_first_name,
+                user_role=user["role"],
+                company_name=company_name,
+                available_skills=available_skills,
+                single_skill_mode=False,
+                greeting_message=f"Hi {user_first_name}! I can see you work for {company_name}. I can help you with {skills_list}. What would you like to do today?",
+                session_context={
+                    "user_id": user["id"],
+                    "tenant_id": user["tenant_id"], 
+                    "caller_phone": clean_phone
+                }
+            )
+    
+    except Exception as e:
+        logger.error(f"Authentication error for {caller_phone}: {str(e)}")
+        return PhoneAuthResponse(
+            authorized=False,
+            message="System error during authentication. Please try again later."
+        )
+
+# ============================================
+# ADD SESSION CONTEXT HELPER FUNCTION
+# ============================================
+
+async def get_session_context_by_call_id(vapi_call_id: str) -> Optional[Dict]:
+    """
+    Get session context from vapi_logs using call ID
+    Works with both bearer token and phone-only authentication
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/vapi_logs",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={
+                    "vapi_call_id": f"eq.{vapi_call_id}",
+                    "select": "tenant_id,user_id,caller_phone,raw_log_data",
+                    "limit": "1",
+                    "order": "created_at.desc"
+                }
+            )
+            
+            if response.status_code == 200:
+                logs = response.json()
+                return logs[0] if logs else None
+            
+            return None
+    
+    except Exception as e:
+        logger.error(f"Error getting session context for call {vapi_call_id}: {str(e)}")
+        return None
+
+# ============================================
+# ADD VOICE NOTES SKILL ENDPOINTS
+# ============================================
+
+@app.post("/api/v1/skills/voice-notes/identify-context")
+async def identify_voice_note_context(request: VoiceNoteContextRequest):
+    """
+    Identify if this is a site-specific note and validate the site if needed
+    Uses session context from phone-only authentication (no bearer token needed)
+    """
+    note_type = request.note_type
+    site_description = request.site_description or ""
+    vapi_call_id = request.vapi_call_id
+    
+    try:
+        # Get session context from previous authentication
+        session_context = await get_session_context_by_call_id(vapi_call_id)
+        
+        if not session_context:
+            return {"context_identified": False, "error": "Call session not found. Please try calling again."}
+        
+        tenant_id = session_context["tenant_id"]
+        
+        async with httpx.AsyncClient() as client:
+            # Get company name for better user experience
+            company_response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenants",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={
+                    "id": f"eq.{tenant_id}",
+                    "select": "name"
+                }
+            )
+            
+            company_name = "your company"
+            if company_response.status_code == 200:
+                company_data = company_response.json()
+                if company_data:
+                    company_name = company_data[0]["name"]
+            
+            if note_type == "general":
+                return {
+                    "context_identified": True,
+                    "note_type": "general",
+                    "message": f"I'll record a general note for {company_name}.",
+                    "company_name": company_name,
+                    "site_id": None
+                }
+            
+            elif note_type == "site_specific":
+                if not site_description:
+                    return {
+                        "context_identified": False,
+                        "error": "Site description required for site-specific notes"
+                    }
+                
+                # Get available sites (entities) for this company
+                sites_response = await client.get(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/entities",
+                    headers={
+                        "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                        "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                    },
+                    params={
+                        "tenant_id": f"eq.{tenant_id}",
+                        "entity_type": "eq.sites",
+                        "is_active": "eq.true",
+                        "select": "id,name,identifier,address"
+                    }
+                )
+                
+                if sites_response.status_code != 200:
+                    return {"context_identified": False, "error": f"Unable to fetch {company_name} sites"}
+                
+                sites = sites_response.json()
+                
+                if not sites:
+                    return {
+                        "context_identified": False,
+                        "error": f"No active sites found for {company_name}. I can record this as a general note instead."
+                    }
+                
+                # Create a detailed prompt with actual entity data
+                site_options = []
+                for site in sites:
+                    site_info = {
+                        "id": site["id"],
+                        "name": site["name"],
+                        "identifier": site.get("identifier", ""),
+                        "address": site.get("address", "")
+                    }
+                    site_options.append(site_info)
+                
+                # Create prompt with actual site IDs and names
+                site_list = "\n".join([
+                    f"- ID: {site['id']}, Name: {site['name']}, Identifier: {site.get('identifier', 'None')}, Address: {site.get('address', 'None')}"
+                    for site in sites
+                ])
+                
+                prompt = f"""
+                Available construction sites for {company_name}:
+                {site_list}
+
+                User said: "{site_description}"
+
+                Which site are they referring to? You MUST use the exact ID from the list above. Return JSON only:
+                {{
+                  "site_found": true/false,
+                  "site_id": "exact UUID from the ID field above if found, null if not found",
+                  "site_name": "exact name if found",
+                  "confidence": "high/medium/low"
+                }}
+
+                IMPORTANT: The site_id MUST be the exact UUID from the ID field, not a shortened version.
+                """
+                
+                # Call OpenAI API for site matching
+                openai_response = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "gpt-3.5-turbo",
+                        "max_tokens": 500,
+                        "messages": [{"role": "user", "content": prompt}]
+                    }
+                )
+                                
+                if openai_response.status_code != 200:
+                    logger.error(f"OpenAI API error: {openai_response.status_code} - {openai_response.text}")
+                    return {"context_identified": False, "error": f"AI site matching service unavailable"}
+                
+                # Parse OpenAI response
+                openai_result = openai_response.json()
+                site_match_text = openai_result["choices"][0]["message"]["content"]
+                
+                # Parse JSON from OpenAI response
+                import json
+                try:
+                    site_match = json.loads(site_match_text)
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON parsing error: {e}. Response was: {site_match_text}")
+                    return {"context_identified": False, "error": "Unable to process site description"}
+                
+                # Validate that the returned site_id actually exists in our database
+                if site_match.get("site_found"):
+                    matched_site_id = site_match["site_id"]
+                    
+                    # Double-check the site ID exists in our entities
+                    matching_site = next((site for site in sites if site["id"] == matched_site_id), None)
+                    
+                    if matching_site:
+                        return {
+                            "context_identified": True,
+                            "note_type": "site_specific",
+                            "site_id": matching_site["id"],  # Proper UUID
+                            "site_name": matching_site["name"],
+                            "site_identifier": matching_site.get("identifier"),
+                            "site_address": matching_site.get("address"),
+                            "message": f"I'll record a note for {matching_site['name']} at {company_name}.",
+                            "company_name": company_name
+                        }
+                    else:
+                        logger.error(f"OpenAI returned invalid site_id: {matched_site_id}")
+                        # Fall through to error case
+                
+                # Site not found or invalid ID returned
+                available_sites_text = ", ".join([f"{site['name']} ({site.get('identifier', '')})" for site in sites])
+                return {
+                    "context_identified": False,
+                    "available_sites": available_sites_text,
+                    "error": f"I couldn't identify that site. Available {company_name} sites are: {available_sites_text}. You can also record this as a general note."
+                }
+    
+    except Exception as e:
+        logger.error(f"Context identification error: {str(e)}")
+        return {"context_identified": False, "error": f"System error: {str(e)}"}
+
+
+@app.post("/api/v1/skills/voice-notes/save-note")
+async def save_voice_note(request: VoiceNoteSaveRequest):
+    """
+    Save a voice note (either site-specific or general) with company context from phone-only auth
+    """
+    try:
+        vapi_call_id = request.vapi_call_id
+        note_content = request.note_content
+        note_summary = request.note_summary or ""
+        note_type = request.note_type
+        site_id = request.site_id
+        full_transcript = request.full_transcript
+        
+        # Get session context from previous authentication
+        session_context = await get_session_context_by_call_id(vapi_call_id)
+        
+        if not session_context:
+            return {"success": False, "error": "Call session not found. Please try calling again."}
+        
+        tenant_id = session_context["tenant_id"]
+        user_id = session_context["user_id"]
+        caller_phone = session_context["caller_phone"]
+        
+        async with httpx.AsyncClient() as client:
+            # Get company name
+            company_response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenants",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={
+                    "id": f"eq.{tenant_id}",
+                    "select": "name"
+                }
+            )
+            
+            company_name = "Unknown Company"
+            if company_response.status_code == 200:
+                try:
+                    company_data = company_response.json()
+                    if company_data:
+                        company_name = company_data[0]["name"]
+                except:
+                    pass
+            
+            # Get site name if site-specific
+            site_name = None
+            if site_id:
+                site_response = await client.get(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/entities",
+                    headers={
+                        "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                        "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                    },
+                    params={
+                        "id": f"eq.{site_id}",
+                        "select": "name"
+                    }
+                )
+                if site_response.status_code == 200:
+                    try:
+                        site_data = site_response.json()
+                        if site_data:
+                            site_name = site_data[0]["name"]
+                    except:
+                        pass
+            
+            # Generate unique ID for this note
+            import uuid
+            note_id = str(uuid.uuid4())
+            
+            # Store in voice_notes table
+            voice_note_data = {
+                "id": note_id,  # Explicitly set ID
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "site_id": site_id,
+                "vapi_call_id": vapi_call_id,
+                "phone_number": caller_phone,
+                "note_type": note_type,
+                "note_content": note_content,
+                "note_summary": note_summary,
+                "full_transcript": full_transcript
+            }
+            
+            store_response = await client.post(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/voice_notes",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal"  # Don't expect response body
+                },
+                json=voice_note_data
+            )
+            
+            if store_response.status_code == 201:
+                note_location = f" for {site_name}" if site_name else " (general)"
+                logger.info(f"Voice note saved for {company_name}{note_location}: {vapi_call_id}")
+                
+                return {
+                    "success": True,
+                    "message": f"Voice note saved successfully{note_location}",
+                    "note_id": note_id,
+                    "company_name": company_name,
+                    "site_name": site_name,
+                    "note_type": note_type
+                }
+            else:
+                logger.error(f"Failed to store voice note: {store_response.status_code} - {store_response.text}")
+                return {"success": False, "error": f"Database error: {store_response.status_code}"}
+    
+    except Exception as e:
+        logger.error(f"Voice note storage error: {str(e)}")
+        return {"success": False, "error": f"Storage error: {str(e)}"}
+    
+
+@app.get("/api/v1/skills/voice-notes/get-notes")
+async def get_voice_notes(
+    note_type: Optional[str] = None,  # 'general' or 'site_specific'
+    site_id: Optional[str] = None,
+    limit: int = 10,
+    tenant_id: str = Depends(get_tenant_from_api_key)
+):
+    """
+    Get voice notes for a tenant, optionally filtered by type or site
+    """
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            # Build query parameters
+            params = {
+                "tenant_id": f"eq.{tenant_id}",
+                "select": "id,note_type,note_content,note_summary,full_transcript,created_at,users(name),entities(name,identifier,address)",
+                "order": "created_at.desc",
+                "limit": str(limit)
+            }
+            
+            # Add filters if specified
+            if note_type:
+                params["note_type"] = f"eq.{note_type}"
+            
+            if site_id:
+                params["site_id"] = f"eq.{site_id}"
+            
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/voice_notes",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params=params
+            )
+            
+            if response.status_code == 200:
+                notes = response.json()
+                
+                # Format the response
+                formatted_notes = []
+                for note in notes:
+                    formatted_note = {
+                        "id": note["id"],
+                        "note_type": note["note_type"],
+                        "content": note["note_content"],
+                        "summary": note["note_summary"],
+                        "created_at": note["created_at"],
+                        "user_name": note.get("users", {}).get("name") if note.get("users") else None
+                    }
+                    
+                    # Add site info for site-specific notes
+                    if note["note_type"] == "site_specific" and note.get("entities"):
+                        site_info = note["entities"]
+                        formatted_note["site"] = {
+                            "name": site_info.get("name"),
+                            "identifier": site_info.get("identifier"),
+                            "address": site_info.get("address")
+                        }
+                    
+                    formatted_notes.append(formatted_note)
+                
+                return {
+                    "success": True,
+                    "notes": formatted_notes,
+                    "total": len(formatted_notes),
+                    "filters": {
+                        "note_type": note_type,
+                        "site_id": site_id
+                    }
+                }
+            else:
+                return {"success": False, "error": f"Database error: {response.text}"}
+    
+    except Exception as e:
+        logger.error(f"Error retrieving voice notes: {str(e)}")
+        return {"success": False, "error": f"Query error: {str(e)}"}
+
+
+# Add a user-specific endpoint that uses phone authentication
+@app.post("/api/v1/skills/voice-notes/get-my-notes") 
+async def get_my_voice_notes(
+    request: dict  # Should contain vapi_call_id to get user context
+):
+    """
+    Get voice notes for the authenticated user (from phone-only auth)
+    """
+    vapi_call_id = request.get("vapi_call_id")
+    note_type = request.get("note_type")  # optional filter
+    limit = request.get("limit", 10)
+    
+    try:
+        # Get session context from phone authentication
+        session_context = await get_session_context_by_call_id(vapi_call_id)
+        
+        if not session_context:
+            return {"success": False, "error": "Call session not found"}
+        
+        tenant_id = session_context["tenant_id"]
+        user_id = session_context["user_id"]
+        
+        async with httpx.AsyncClient() as client:
+            # Build query parameters for user's notes
+            params = {
+                "tenant_id": f"eq.{tenant_id}",
+                "user_id": f"eq.{user_id}",
+                "select": "id,note_type,note_content,note_summary,created_at,entities(name,identifier)",
+                "order": "created_at.desc",
+                "limit": str(limit)
+            }
+            
+            if note_type:
+                params["note_type"] = f"eq.{note_type}"
+            
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/voice_notes",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params=params
+            )
+            
+            if response.status_code == 200:
+                notes = response.json()
+                
+                # Separate general and site-specific notes
+                general_notes = []
+                site_notes = []
+                
+                for note in notes:
+                    formatted_note = {
+                        "id": note["id"],
+                        "content": note["note_content"],
+                        "summary": note["note_summary"],
+                        "created_at": note["created_at"]
+                    }
+                    
+                    if note["note_type"] == "general":
+                        general_notes.append(formatted_note)
+                    elif note["note_type"] == "site_specific":
+                        if note.get("entities"):
+                            formatted_note["site_name"] = note["entities"]["name"]
+                            formatted_note["site_identifier"] = note["entities"].get("identifier")
+                        site_notes.append(formatted_note)
+                
+                return {
+                    "success": True,
+                    "general_notes": general_notes,
+                    "site_specific_notes": site_notes,
+                    "total_general": len(general_notes),
+                    "total_site_specific": len(site_notes)
+                }
+            else:
+                return {"success": False, "error": f"Database error: {response.text}"}
+    
+    except Exception as e:
+        logger.error(f"Error retrieving user notes: {str(e)}")
+        return {"success": False, "error": f"Query error: {str(e)}"}
 
 # ============================================
 # INTERNAL USER HANDLER
@@ -871,6 +1588,58 @@ async def debug_check_entities(tenant_id: str = Depends(get_tenant_from_api_key)
             "error": str(e),
             "type": type(e).__name__,
             "current_tenant_id": tenant_id
+        }
+    
+# Add this debug endpoint to your main.py
+@app.get("/debug/check-voice-notes-table")
+async def check_voice_notes_table():
+    """Check if voice_notes table exists and what its structure is"""
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            # Try to query the table structure
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/voice_notes",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={
+                    "limit": "1"  # Just get one row to see structure
+                }
+            )
+            
+            return {
+                "table_exists": response.status_code == 200,
+                "status_code": response.status_code,
+                "response_text": response.text,
+                "error_details": None if response.status_code == 200 else response.text
+            }
+    
+    except Exception as e:
+        return {
+            "table_exists": False,
+            "error": str(e),
+            "type": type(e).__name__
+        }
+
+# Also add this endpoint to test the session context retrieval
+@app.get("/debug/check-session-context/{vapi_call_id}")
+async def debug_session_context(vapi_call_id: str):
+    """Debug: Check what session context exists for a call ID"""
+    
+    try:
+        session_context = await get_session_context_by_call_id(vapi_call_id)
+        
+        return {
+            "found": session_context is not None,
+            "session_context": session_context
+        }
+    
+    except Exception as e:
+        return {
+            "error": str(e),
+            "type": type(e).__name__
         }
 
 
