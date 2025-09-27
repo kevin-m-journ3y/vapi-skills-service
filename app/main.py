@@ -925,11 +925,10 @@ async def identify_voice_note_context(request: dict):
 
 
 @app.post("/api/v1/skills/voice-notes/save-note")
-@vapi_tool
+#@vapi_tool
 async def save_voice_note(request: dict):
     """
     Save a voice note (either site-specific or general) with company context
-    VAPI-compatible version using decorator
     """
 
     # DEBUG: Log the full request structure
@@ -939,25 +938,9 @@ async def save_voice_note(request: dict):
 
     logger.info(f"Full VAPI request structure: {json.dumps(request, indent=2)}")
 
-    # Extract call ID from VAPI request structure
-    vapi_call_id = None
-
-    # Method 1: Check if call ID is in message.call
-    if "message" in request and "call" in request["message"]:
-        vapi_call_id = request["message"]["call"]["id"]
-        logger.info(f"Method 1 - Found call ID in message.call: {vapi_call_id}")
+    """Save voice note - VAPI compatible"""
     
-    # Method 2: Check if call ID is at root level
-    if not vapi_call_id and "call" in request:
-        vapi_call_id = request["call"]["id"]
-        logger.info(f"Method 2 - Found call ID at root: {vapi_call_id}")
-    
-    # Method 3: Check other possible locations
-    if not vapi_call_id:
-        logger.info(f"Available keys in request: {list(request.keys())}")
-        if "message" in request:
-            logger.info(f"Available keys in message: {list(request['message'].keys())}")
-
+    # Extract VAPI arguments manually (like in identify_context)
     tool_call_id = "unknown"
     args = {}
     
@@ -969,6 +952,12 @@ async def save_voice_note(request: dict):
             args = tool_call["function"]["arguments"]
     else:
         args = request
+    
+    # Extract call ID from the full request structure
+    vapi_call_id = None
+    if "message" in request and "call" in request["message"]:
+        vapi_call_id = request["message"]["call"]["id"]
+        logger.info(f"Extracted call ID: {vapi_call_id}")
 
     try:
         if not vapi_call_id:
