@@ -931,6 +931,12 @@ async def save_voice_note(request: dict):
     VAPI-compatible version using decorator
     """
 
+    # Extract call ID from VAPI request structure
+    vapi_call_id = None
+    if "message" in request and "call" in request["message"]:
+        vapi_call_id = request["message"]["call"]["id"]
+        logger.info(f"Extracted real call ID from VAPI request: {vapi_call_id}")
+
     tool_call_id = "unknown"
     args = {}
     
@@ -944,7 +950,8 @@ async def save_voice_note(request: dict):
         args = request
 
     try:
-        vapi_call_id = args.get("vapi_call_id", "unknown")
+        if not vapi_call_id:
+            vapi_call_id = args.get("vapi_call_id", "unknown")
         note_content = args.get("note_text", "")
         note_type = args.get("note_type", "general")
         site_id = args.get("site_id")

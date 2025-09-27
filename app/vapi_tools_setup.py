@@ -32,12 +32,12 @@ class VAPIToolsManager:
                             "type": "string",
                             "description": "The caller's phone number"
                         },
-                        "vapi_call_id": {
-                            "type": "string",
-                            "description": "The VAPI call identifier"
-                        }
+                        #"vapi_call_id": {
+                        #    "type": "string",
+                        #    "description": "The VAPI call identifier"
+                        #}
                     },
-                    "required": ["caller_phone", "vapi_call_id"]
+                    "required": ["caller_phone"]
                 }
             },
             "server": {
