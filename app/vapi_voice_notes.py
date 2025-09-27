@@ -41,7 +41,7 @@ class VoiceNotesVAPISystem:
             "Content-Type": "application/json"
         }
 
-    async def create_auth_agent(self) -> str:
+    async def create_auth_agent(self, tool_ids: Dict[str, str]) -> str:
         """Create the generic authentication and greeting agent"""
         logger.info("Creating generic authentication agent...")
         
@@ -77,27 +77,7 @@ class VoiceNotesVAPISystem:
                 "tools": [
                     {
                         "type": "function",
-                        "function": {
-                            "name": "authenticate_caller",
-                            "description": "Authenticate caller and get their available skills",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "caller_phone": {
-                                        "type": "string",
-                                        "description": "The caller's phone number"
-                                    },
-                                    "vapi_call_id": {
-                                        "type": "string",
-                                        "description": "The VAPI call ID"
-                                    }
-                                },
-                                "required": ["caller_phone", "vapi_call_id"]
-                            }
-                        },
-                        "server": {
-                            "url": f"{self.webhook_base}/api/v1/vapi/authenticate-by-phone"
-                        }
+                        "id": tool_ids["authenticate_caller"]  # Reference the created tool ID
                     }
                 ]
             },
@@ -128,7 +108,7 @@ class VoiceNotesVAPISystem:
             result = response.json()
             return result["id"]
 
-    async def create_voice_notes_agent(self) -> str:
+    async def create_voice_notes_agent(self, tool_ids: Dict[str, str]) -> str:
         """Create the generic voice notes recording agent"""
         logger.info("Creating generic voice notes agent...")
         
@@ -163,63 +143,11 @@ class VoiceNotesVAPISystem:
                 "tools": [
                     {
                         "type": "function",
-                        "function": {
-                            "name": "identify_context",
-                            "description": "Identify if note is site-specific and which site",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "site_description": {
-                                        "type": "string",
-                                        "description": "Site description if mentioned (address, nickname, etc.)"
-                                    },
-                                    "vapi_call_id": {
-                                        "type": "string",
-                                        "description": "The VAPI call ID"
-                                    }
-                                },
-                                "required": ["vapi_call_id"]
-                            }
-                        },
-                        "server": {
-                            "url": f"{self.webhook_base}/api/v1/skills/voice-notes/identify-context"
-                        }
+                        "id": tool_ids["identify_context"]  # Reference the created tool ID
                     },
                     {
                         "type": "function",
-                        "function": {
-                            "name": "save_note",
-                            "description": "Save the voice note with context",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "vapi_call_id": {
-                                        "type": "string",
-                                        "description": "The VAPI call ID"
-                                    },
-                                    "note_content": {
-                                        "type": "string",
-                                        "description": "The main content of the voice note"
-                                    },
-                                    "note_type": {
-                                        "type": "string",
-                                        "description": "Type of note: 'general' or 'site_specific'"
-                                    },
-                                    "site_id": {
-                                        "type": "string",
-                                        "description": "Site ID if this is site-specific (optional)"
-                                    },
-                                    "full_transcript": {
-                                        "type": "string",
-                                        "description": "Complete conversation transcript"
-                                    }
-                                },
-                                "required": ["vapi_call_id", "note_content", "note_type", "full_transcript"]
-                            }
-                        },
-                        "server": {
-                            "url": f"{self.webhook_base}/api/v1/skills/voice-notes/save-note"
-                        }
+                        "id": tool_ids["save_note"]  # Reference the created tool ID
                     }
                 ]
             },
@@ -327,9 +255,14 @@ class VoiceNotesVAPISystem:
     async def setup_voice_notes_system(self) -> Dict[str, Any]:
         """Set up the complete voice notes system"""
         try:
-            # Create both agents
-            auth_agent_id = await self.create_auth_agent()
-            voice_notes_agent_id = await self.create_voice_notes_agent()
+            # First create tools using VAPIToolsManager
+            from app.vapi_tools_setup import VAPIToolsManager
+            tools_manager = VAPIToolsManager()
+            tool_ids = await tools_manager.setup_all_tools()
+            
+            # Create agents with tool IDs
+            auth_agent_id = await self.create_auth_agent(tool_ids)
+            voice_notes_agent_id = await self.create_voice_notes_agent(tool_ids)
             
             # Create squad
             squad_id = await self.create_voice_notes_squad(auth_agent_id, voice_notes_agent_id)
@@ -339,12 +272,13 @@ class VoiceNotesVAPISystem:
                 "auth_agent_id": auth_agent_id,
                 "voice_notes_agent_id": voice_notes_agent_id,
                 "squad_id": squad_id,
+                "tool_ids": tool_ids,
                 "message": "Voice notes system setup complete!"
             }
             
         except Exception as e:
             logger.error(f"Error setting up voice notes system: {e}")
-            raise
+            raise   
 
 
 async def setup_voice_notes_system() -> Dict[str, Any]:
