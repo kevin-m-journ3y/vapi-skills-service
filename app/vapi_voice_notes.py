@@ -74,12 +74,7 @@ class VoiceNotesVAPISystem:
                         TRANSFER: Transfer to the appropriate skill agent based on user choice or single available skill."""
                     }
                 ],
-                "tools": [
-                    {
-                        "type": "function",
-                        "id": tool_ids["authenticate_caller"]  # Reference the created tool ID
-                    }
-                ]
+                "toolIds": [tool_ids["authenticate_caller"]]  # Use toolIds array instead of tools array
             },
             "voice": {
                 "model": "eleven_turbo_v2_5",
@@ -140,16 +135,10 @@ class VoiceNotesVAPISystem:
                         Remember: You're helping capture important information quickly and accurately for any construction company."""
                     }
                 ],
-                "tools": [
-                    {
-                        "type": "function",
-                        "id": tool_ids["identify_context"]  # Reference the created tool ID
-                    },
-                    {
-                        "type": "function",
-                        "id": tool_ids["save_note"]  # Reference the created tool ID
-                    }
-                ]
+                "toolIds": [
+                    tool_ids["identify_context"],
+                    tool_ids["save_note"]
+                ]  # Use toolIds array instead of tools array
             },
             "voice": {
                 "model": "eleven_turbo_v2_5",
