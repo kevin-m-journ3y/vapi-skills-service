@@ -161,7 +161,7 @@ class VoiceNoteSaveRequest(BaseModel):
     full_transcript: str
 
 # ============================================
-# Esystem initialsation
+# System initialsation
 # ============================================
 
 # Initialize VAPI system
@@ -174,7 +174,14 @@ async def setup_voice_notes_system():
     Complete setup of the VAPI voice notes system including tools, assistants, and squad
     """
     try:
-        system_info = await vapi_system.setup_complete_system()
+        if not os.getenv("VAPI_API_KEY"):
+            return {"success": False, "error": "VAPI_API_KEY not configured"}
+        
+        # Create new instance for setup
+        from app.vapi_voice_notes import VoiceNotesVAPISystem
+        system = VoiceNotesVAPISystem()
+        
+        system_info = await system.setup_complete_system()
         return {
             "success": True,
             "message": "Voice notes system setup complete",
@@ -193,7 +200,13 @@ async def get_system_status():
     Get current status of the VAPI voice notes system
     """
     try:
-        status = await vapi_system.get_system_status()
+        if not os.getenv("VAPI_API_KEY"):
+            return {"success": False, "error": "VAPI_API_KEY not configured"}
+        
+        from app.vapi_voice_notes import VoiceNotesVAPISystem
+        system = VoiceNotesVAPISystem()
+        
+        status = await system.get_system_status()
         return {
             "success": True,
             "status": status
@@ -204,13 +217,20 @@ async def get_system_status():
             "success": False,
             "error": str(e)
         }
-
+    
 @app.post("/api/v1/vapi/setup-tools-only")
 async def setup_tools_only():
     """
     Set up only the VAPI tools (useful for testing)
     """
     try:
+        if not os.getenv("VAPI_API_KEY"):
+            return {"success": False, "error": "VAPI_API_KEY not configured"}
+        
+        # Create local instance instead of using global
+        from app.vapi_tools_setup import VAPIToolsManager
+        tools_manager = VAPIToolsManager()
+        
         tool_ids = await tools_manager.setup_all_tools()
         return {
             "success": True,
@@ -230,6 +250,13 @@ async def cleanup_tools():
     Clean up VAPI tools (useful for testing/reset)
     """
     try:
+        if not os.getenv("VAPI_API_KEY"):
+            return {"success": False, "error": "VAPI_API_KEY not configured"}
+        
+        # Create local instance
+        from app.vapi_tools_setup import VAPIToolsManager
+        tools_manager = VAPIToolsManager()
+        
         existing_tools = await tools_manager.get_existing_tools()
         deleted_count = 0
         
