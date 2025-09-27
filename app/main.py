@@ -447,7 +447,7 @@ async def authenticate_by_phone(request: dict):
         
         # Default to John Smith's number for testing if no phone provided
         if not caller_phone:
-            caller_phone = "+61412345678"  # John Smith's test number
+            caller_phone = "+61412345678"
             logger.info(f"No phone provided, defaulting to test number: {caller_phone}")
         
         logger.info(f"Authenticating phone: {caller_phone} for call: {vapi_call_id}")
@@ -473,7 +473,6 @@ async def authenticate_by_phone(request: dict):
                 return {
                     "authorized": False,
                     "message": "System error during authentication",
-                    "user_name": None,
                     "available_skills": []
                 }
             
@@ -484,11 +483,11 @@ async def authenticate_by_phone(request: dict):
                 return {
                     "authorized": False,
                     "message": f"Phone number {caller_phone} is not authorized. Please contact your administrator.",
-                    "user_name": None,
                     "available_skills": []
                 }
             
-            user = users[0]  # Take first match
+            user = users[0]
+            logger.info(f"Found user: {user}")
             
             # Get user's available skills
             skills_response = await client.get(
@@ -507,66 +506,103 @@ async def authenticate_by_phone(request: dict):
             available_skills = []
             if skills_response.status_code == 200:
                 user_skills = skills_response.json()
-                available_skills = [
-                    {
-                        "skill_key": skill["skills"]["skill_key"],
-                        "skill_name": skill["skills"]["name"],
-                        "skill_description": skill["skills"]["description"],
-                        "vapi_assistant_id": skill["skills"]["vapi_assistant_id"]
-                    }
-                    for skill in user_skills
-                ]
+                logger.info(f"Raw user skills: {user_skills}")
+                
+                for skill_data in user_skills:
+                    if skill_data.get("skills"):
+                        skill = skill_data["skills"]
+                        # Handle None values explicitly
+                        skill_key = skill.get("skill_key") or "unknown"
+                        skill_name = skill.get("name") or "Unknown Skill"
+                        skill_description = skill.get("description") or skill_name
+                        vapi_assistant_id = skill.get("vapi_assistant_id")
+                        
+                        available_skills.append({
+                            "skill_key": skill_key,
+                            "skill_name": skill_name,
+                            "skill_description": skill_description,
+                            "vapi_assistant_id": vapi_assistant_id
+                        })
+                
+                logger.info(f"Processed available skills: {available_skills}")
             
             if not available_skills:
                 logger.warning(f"User {user['name']} has no enabled skills")
                 return {
                     "authorized": False,
                     "message": f"User {user['name']} has no enabled skills. Please contact your administrator.",
-                    "user_name": user['name'],
                     "available_skills": []
                 }
             
             # Extract first name for greeting
-            first_name = user['name'].split()[0] if user['name'] else "there"
+            first_name = user.get('name', 'there').split()[0] if user.get('name') else "there"
+            logger.info(f"First name extracted: {first_name}")
             
-            # Log the authentication attempt
-            await log_vapi_interaction(
-                vapi_call_id=vapi_call_id,
-                interaction_type="authentication",
-                user_id=user['id'],
-                tenant_id=user['tenant_id'],
-                caller_phone=caller_phone,
-                details={
-                    "authorized": True,
-                    "user_name": user['name'],
-                    "tenant_name": user['tenants']['name'],
-                    "skills_count": len(available_skills)
-                }
-            )
-            
-            logger.info(f"Successfully authenticated {user['name']} with {len(available_skills)} skills")
-            
-            # Create dynamic greeting based on skills
-            if len(available_skills) == 1:
-                skill = available_skills[0]
-                greeting_message = f"Hi {first_name}! Ready to {skill['skill_description'].lower()}? Let me connect you right away."
-                should_transfer = True
-                transfer_to = skill['vapi_assistant_id'] or "JSMB-Jill-voice-notes"
-            else:
-                skill_names = [skill['skill_description'] for skill in available_skills]
-                skills_text = " or ".join(skill_names)
-                greeting_message = f"Hi {first_name}! I can help you with {skills_text}. What would you like to do today?"
+            # Create dynamic greeting based on skills - handle None values safely
+            try:
+                if len(available_skills) == 1:
+                    skill = available_skills[0]
+                    skill_desc = skill['skill_description']
+                    greeting_message = f"Hi {first_name}! Ready to {skill_desc.lower()}? Let me connect you right away."
+                    should_transfer = True
+                    transfer_to = skill.get('vapi_assistant_id') or "JSMB-Jill-voice-notes"
+                else:
+                    # Create list of skill descriptions, filtering out any None values
+                    skill_descriptions = []
+                    for skill in available_skills:
+                        desc = skill.get('skill_description')
+                        if desc and desc.strip():  # Check for non-empty strings
+                            skill_descriptions.append(desc)
+                    
+                    logger.info(f"Skill descriptions for greeting: {skill_descriptions}")
+                    
+                    if skill_descriptions:
+                        skills_text = " or ".join(skill_descriptions)
+                        greeting_message = f"Hi {first_name}! I can help you with {skills_text}. What would you like to do today?"
+                    else:
+                        # Fallback if no valid descriptions
+                        greeting_message = f"Hi {first_name}! I can help you with several tasks. What would you like to do today?"
+                    
+                    should_transfer = False
+                    transfer_to = None
+                
+                logger.info(f"Generated greeting: {greeting_message}")
+                
+            except Exception as greeting_error:
+                logger.error(f"Error generating greeting: {greeting_error}")
+                greeting_message = f"Hi {first_name}! How can I help you today?"
                 should_transfer = False
                 transfer_to = None
             
-            return {
+            # Try to log authentication attempt (don't let this break the response)
+            try:
+                await log_vapi_interaction(
+                    vapi_call_id=vapi_call_id or "unknown",
+                    interaction_type="authentication",
+                    user_id=user['id'],
+                    tenant_id=user['tenant_id'],
+                    caller_phone=caller_phone,
+                    details={
+                        "authorized": True,
+                        "user_name": user.get('name', 'Unknown'),
+                        "tenant_name": user.get('tenants', {}).get('name', 'Unknown') if user.get('tenants') else 'Unknown',
+                        "skills_count": len(available_skills)
+                    }
+                )
+            except Exception as log_error:
+                logger.warning(f"Failed to log authentication (continuing anyway): {log_error}")
+            
+            logger.info(f"Successfully authenticated {user.get('name', 'Unknown')} with {len(available_skills)} skills")
+            
+            # Build response safely
+            response = {
                 "authorized": True,
                 "message": greeting_message,
-                "user_name": user['name'],
+                "user_name": user.get('name', 'Unknown'),
                 "first_name": first_name,
-                "user_id": user['id'],
-                "tenant_id": user['tenant_id'],
-                "tenant_name": user['tenants']['name'],
+                "user_id": user.get('id'),
+                "tenant_id": user.get('tenant_id'),
+                "tenant_name": user.get('tenants', {}).get('name', 'Unknown') if user.get('tenants') else 'Unknown',
                 "phone_number": caller_phone,
                 "available_skills": available_skills,
                 "skill_count": len(available_skills),
@@ -574,8 +610,13 @@ async def authenticate_by_phone(request: dict):
                 "transfer_to": transfer_to
             }
             
+            logger.info(f"Final response constructed successfully")
+            return response
+            
     except Exception as e:
         logger.error(f"Authentication error: {e}")
+        import traceback
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         return {
             "authorized": False,
             "message": "System error during authentication. Please try again.",
