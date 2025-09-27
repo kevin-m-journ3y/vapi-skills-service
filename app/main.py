@@ -727,9 +727,19 @@ async def identify_voice_note_context(request: dict):
                 args = tool_call["function"]["arguments"]
         else:
             args = request
+
+        # Extract call ID from the full request structure
+        vapi_call_id = None
+        if "message" in request and "call" in request["message"]:
+            vapi_call_id = request["message"]["call"]["id"]
+            logger.info(f"Extracted call ID in identify_context: {vapi_call_id}")
+        
+        # Use tool_call_id as fallback if no call ID found
+        if not vapi_call_id:
+            vapi_call_id = tool_call_id
+            logger.info(f"Using tool_call_id as fallback in identify_context: {vapi_call_id}")
         
         user_input = args.get("user_input", "")
-        vapi_call_id = args.get("vapi_call_id", "unknown")
         
         # Get session context from previous authentication
         session_context = await get_session_context_by_call_id(vapi_call_id)
