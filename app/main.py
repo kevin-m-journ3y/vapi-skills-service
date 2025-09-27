@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 import uuid
 from datetime import datetime, date
 import logging
-from app.vapi_voice_notes import VoiceNotesVAPISystem, add_voice_notes_management_endpoints
+from app.vapi_voice_notes import VoiceNotesVAPISystem, add_voice_notes_management_endpoints, VAPIConfig
 
 # Load environment variables from .env file
 load_dotenv()
