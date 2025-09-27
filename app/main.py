@@ -436,24 +436,39 @@ async def authenticate_vapi_caller(
 
 @app.post("/api/v1/vapi/authenticate-by-phone")
 async def authenticate_by_phone(request: dict):
-    """Authenticate caller by phone number - VAPI compatible response format"""
+    """Authenticate caller by phone number - VAPI/OpenAI function calling compatible"""
     
     try:
-        # Extract the tool call ID from the request (VAPI sends this)
-        tool_call_id = request.get("toolCallId") or request.get("tool_call_id") or "unknown"
+        # Log the full request to understand VAPI's structure
+        logger.info(f"Full VAPI request: {request}")
         
-        # Extract phone number with fallback to test number (your existing logic)
+        # VAPI sends requests in OpenAI function calling format
+        # Need to extract toolCallId from the request structure
+        tool_call_id = None
+        
+        # Try different ways VAPI might send the toolCallId
+        if "toolCallId" in request:
+            tool_call_id = request["toolCallId"]
+        elif "tool_call_id" in request:
+            tool_call_id = request["tool_call_id"]
+        elif "id" in request:
+            tool_call_id = request["id"]
+        else:
+            # Default fallback
+            tool_call_id = "unknown-tool-call"
+        
+        # Extract function arguments (VAPI wraps the actual parameters)
         caller_phone = request.get("caller_phone")
         vapi_call_id = request.get("vapi_call_id", "unknown")
         
-        # TEST MODE: If no phone provided or empty, use test number (your existing logic)
+        # TEST MODE: If no phone provided, use test number
         if not caller_phone or caller_phone.strip() == "":
-            caller_phone = "+61412345678"  # John Smith test number
+            caller_phone = "+61412345678"
             logger.info(f"No phone provided, defaulting to test number: {caller_phone}")
         
-        logger.info(f"Authenticating phone: {caller_phone} for call: {vapi_call_id}, toolCallId: {tool_call_id}")
+        logger.info(f"Authenticating phone: {caller_phone}, call: {vapi_call_id}, toolCallId: {tool_call_id}")
         
-        # Get user by phone number (your existing code pattern)
+        # Your existing authentication logic...
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 f"{os.getenv('SUPABASE_URL')}/rest/v1/users",
@@ -469,34 +484,25 @@ async def authenticate_by_phone(request: dict):
             )
             
             if response.status_code != 200:
-                # VAPI format for error
+                logger.error(f"Supabase error: {response.status_code}")
+                # Return simple object format (matching N8N pattern)
                 return {
-                    "results": [{
-                        "toolCallId": tool_call_id,
-                        "result": {
-                            "authorized": False,
-                            "message": "System error during authentication"
-                        }
-                    }]
+                    "authorized": False,
+                    "message": "System error during authentication"
                 }
             
             users = response.json()
             if not users:
-                # VAPI format for unauthorized
+                logger.info("No users found for phone number")
                 return {
-                    "results": [{
-                        "toolCallId": tool_call_id,
-                        "result": {
-                            "authorized": False,
-                            "message": "Phone number not found or not authorized"
-                        }
-                    }]
+                    "authorized": False,
+                    "message": "Phone number not found or not authorized"
                 }
             
             user = users[0]
             logger.info(f"Found user: {user}")
             
-            # Get user's available skills (your existing code pattern)
+            # Get user's available skills
             skills_response = await client.get(
                 f"{os.getenv('SUPABASE_URL')}/rest/v1/user_skills",
                 headers={
@@ -513,7 +519,7 @@ async def authenticate_by_phone(request: dict):
             user_skills = skills_response.json() if skills_response.status_code == 200 else []
             logger.info(f"Raw user skills: {user_skills}")
             
-            # Process available skills (your existing code pattern)
+            # Process available skills
             available_skills = []
             for user_skill in user_skills:
                 skill = user_skill.get('skills', {})
@@ -524,11 +530,8 @@ async def authenticate_by_phone(request: dict):
                     "vapi_assistant_id": skill.get('vapi_assistant_id')
                 })
             
-            logger.info(f"Processed available skills: {available_skills}")
-            
-            # Generate greeting (improved from your existing logic)
+            # Generate greeting
             first_name = user['name'].split()[0] if user['name'] else "there"
-            logger.info(f"First name extracted: {first_name}")
             
             # Clean up skill names for greeting
             skill_names = []
@@ -543,7 +546,6 @@ async def authenticate_by_phone(request: dict):
                 else:
                     skill_names.append(name)
             
-            # Generate greeting based on skill count
             if len(skill_names) == 1:
                 greeting = f"Hi {first_name}! Ready for {skill_names[0]}? Let me connect you right away."
             elif len(skill_names) == 2:
@@ -553,50 +555,29 @@ async def authenticate_by_phone(request: dict):
                 greeting = f"Hi {first_name}! I can help you with {skills_text}. What would you like to do today?"
             
             logger.info(f"Generated greeting: {greeting}")
-            
-            # Optional: Log the session (your existing logging pattern)
-            session_data = {
-                "user_id": user['id'],
-                "vapi_call_id": vapi_call_id,
-                "caller_phone": caller_phone,
-                "authentication_result": "success",
-                "available_skills_count": len(available_skills),
-                "greeting_sent": greeting
-            }
-            
-            try:
-                await client.post(
-                    f"{os.getenv('SUPABASE_URL')}/rest/v1/vapi_logs",
-                    headers={
-                        "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
-                        "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
-                        "Content-Type": "application/json"
-                    },
-                    json=session_data
-                )
-            except Exception as log_error:
-                logger.warning(f"Failed to log session: {log_error}")
-            
             logger.info(f"Successfully authenticated {user['name']} with {len(available_skills)} skills")
             
-            # VAPI-compatible success response
+            # Return simple object format (not wrapped in results array)
+            # This matches the OpenAI function calling response format
             return {
-                "results": [{
-                    "toolCallId": tool_call_id,
-                    "result": {
-                        "authorized": True,
-                        "user_id": user['id'],
-                        "user_name": user['name'],
-                        "first_name": first_name,
-                        "tenant_name": user['tenants']['name'],
-                        "phone_number": user['phone_number'],
-                        "greeting_message": greeting,
-                        "available_skills": available_skills,
-                        "skill_count": len(available_skills),
-                        "single_skill_mode": len(available_skills) == 1
-                    }
-                }]
+                "authorized": True,
+                "user_id": user['id'],
+                "user_name": user['name'],
+                "first_name": first_name,
+                "tenant_name": user['tenants']['name'],
+                "phone_number": user['phone_number'],
+                "greeting_message": greeting,
+                "available_skills": available_skills,
+                "skill_count": len(available_skills),
+                "single_skill_mode": len(available_skills) == 1
             }
+            
+    except Exception as e:
+        logger.error(f"Authentication error: {e}")
+        return {
+            "authorized": False,
+            "message": "Authentication system error"
+        }
             
     except Exception as e:
         logger.error(f"Authentication error: {e}")
