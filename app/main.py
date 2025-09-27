@@ -436,30 +436,49 @@ async def authenticate_vapi_caller(
 
 @app.post("/api/v1/vapi/authenticate-by-phone")
 async def authenticate_by_phone(request: dict):
-    """Authenticate caller by phone number - VAPI/OpenAI function calling compatible"""
+    """Authenticate caller by phone number - VAPI compatible with correct parsing"""
     
     try:
         # Log the full request to understand VAPI's structure
         logger.info(f"Full VAPI request: {request}")
         
-        # VAPI sends requests in OpenAI function calling format
-        # Need to extract toolCallId from the request structure
+        # VAPI sends requests in this structure (matching N8N working example):
+        # {
+        #   "message": {
+        #     "toolCalls": [
+        #       {
+        #         "id": "call_xyz",
+        #         "function": {
+        #           "arguments": {
+        #             "caller_phone": "+61412345678",
+        #             "vapi_call_id": "test-123"
+        #           }
+        #         }
+        #       }
+        #     ]
+        #   }
+        # }
+        
+        # Extract arguments from the correct VAPI structure
+        caller_phone = None
+        vapi_call_id = None
         tool_call_id = None
         
-        # Try different ways VAPI might send the toolCallId
-        if "toolCallId" in request:
-            tool_call_id = request["toolCallId"]
-        elif "tool_call_id" in request:
-            tool_call_id = request["tool_call_id"]
-        elif "id" in request:
-            tool_call_id = request["id"]
-        else:
-            # Default fallback
-            tool_call_id = "unknown-tool-call"
+        if "message" in request and "toolCalls" in request["message"]:
+            tool_calls = request["message"]["toolCalls"]
+            if len(tool_calls) > 0:
+                tool_call = tool_calls[0]
+                tool_call_id = tool_call.get("id")
+                
+                if "function" in tool_call and "arguments" in tool_call["function"]:
+                    arguments = tool_call["function"]["arguments"]
+                    caller_phone = arguments.get("caller_phone")
+                    vapi_call_id = arguments.get("vapi_call_id")
         
-        # Extract function arguments (VAPI wraps the actual parameters)
-        caller_phone = request.get("caller_phone")
-        vapi_call_id = request.get("vapi_call_id", "unknown")
+        # Fallback for direct format (if VAPI changes structure)
+        if not caller_phone:
+            caller_phone = request.get("caller_phone")
+            vapi_call_id = request.get("vapi_call_id", "unknown")
         
         # TEST MODE: If no phone provided, use test number
         if not caller_phone or caller_phone.strip() == "":
@@ -485,7 +504,6 @@ async def authenticate_by_phone(request: dict):
             
             if response.status_code != 200:
                 logger.error(f"Supabase error: {response.status_code}")
-                # Return simple object format (matching N8N pattern)
                 return {
                     "authorized": False,
                     "message": "System error during authentication"
@@ -557,8 +575,7 @@ async def authenticate_by_phone(request: dict):
             logger.info(f"Generated greeting: {greeting}")
             logger.info(f"Successfully authenticated {user['name']} with {len(available_skills)} skills")
             
-            # Return simple object format (not wrapped in results array)
-            # This matches the OpenAI function calling response format
+            # Return direct object (OpenAI function calling format)
             return {
                 "authorized": True,
                 "user_id": user['id'],
@@ -577,32 +594,6 @@ async def authenticate_by_phone(request: dict):
         return {
             "authorized": False,
             "message": "Authentication system error"
-        }
-            
-    except Exception as e:
-        logger.error(f"Authentication error: {e}")
-        # VAPI format for system error
-        return {
-            "results": [{
-                "toolCallId": tool_call_id,
-                "result": {
-                    "authorized": False,
-                    "message": "Authentication system error"
-                }
-            }]
-        }
-            
-    except Exception as e:
-        logger.error(f"Authentication error: {e}")
-        # VAPI format for system error
-        return {
-            "results": [{
-                "toolCallId": tool_call_id,
-                "result": {
-                    "authorized": False,
-                    "message": "Authentication system error"
-                }
-            }]
         }
     
 async def log_vapi_interaction(vapi_call_id: str, interaction_type: str, 
