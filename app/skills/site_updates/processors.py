@@ -94,9 +94,18 @@ class SiteUpdateProcessor:
 
     def _build_processing_prompt(self, update_data: Dict) -> str:
         """Build the prompt for OpenAI processing"""
-        return f"""
-Analyze this construction site progress update and extract structured information.
+        raw_transcript = update_data.get('raw_transcript', '')
 
+        # If we have a raw transcript, use that as the primary source
+        if raw_transcript:
+            data_section = f"""
+RAW CONVERSATION TRANSCRIPT:
+{raw_transcript}
+
+Analyze this complete site progress conversation and extract ALL structured information from it."""
+        else:
+            # Fallback to individual fields if available
+            data_section = f"""
 SITE UPDATE DATA:
 - Main Focus: {update_data.get('main_focus', 'N/A')}
 - Wet Weather Closure: {update_data.get('is_wet_weather_closure', False)}
@@ -107,11 +116,26 @@ SITE UPDATE DATA:
 - Staffing: {update_data.get('staffing', 'N/A')}
 - Site Visitors: {update_data.get('site_visitors', 'N/A')}
 - Site Conditions: {update_data.get('site_conditions', 'N/A')}
-- Follow-up Actions: {update_data.get('follow_up_actions', 'N/A')}
+- Follow-up Actions: {update_data.get('follow_up_actions', 'N/A')}"""
+
+        return f"""
+Analyze this construction site progress update and extract structured information.
+
+{data_section}
 
 Extract and return ONLY valid JSON with this exact structure (no markdown, no explanation):
 
 {{
+  "main_focus": "Brief description of main work focus today",
+  "is_wet_weather_closure": true/false,
+  "materials_delivered": "Summary of materials/deliveries mentioned, or null",
+  "work_progress": "Summary of work completed and progress made",
+  "issues": "Summary of issues and problems mentioned, or null",
+  "delays": "Summary of delays and schedule impacts, or null",
+  "staffing": "Summary of staffing situation and crew updates, or null",
+  "site_visitors": "Summary of visitors and their purpose, or null",
+  "site_conditions": "Summary of site conditions and safety observations, or null",
+  "follow_up_actions": "Summary of planned actions and follow-ups, or null",
   "summary_brief": "2-3 sentence overview of the day",
   "summary_detailed": "Comprehensive paragraph covering all major points",
   "has_urgent_issues": true/false,
@@ -146,6 +170,8 @@ Extract and return ONLY valid JSON with this exact structure (no markdown, no ex
 IMPORTANT:
 - Return ONLY the JSON object
 - Use empty arrays [] if no items found in a category
+- Use null for text fields if information not mentioned
+- Extract ALL structured fields from the conversation
 - Be specific and actionable in extracted items
 - Identify urgent issues even if not explicitly stated (e.g., safety hazards, critical path delays)
 """

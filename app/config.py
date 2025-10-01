@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"  # "development" or "production"
     log_level: str = "INFO"
 
+    # Testing
+    TEST_DEFAULT_PHONE: Optional[str] = None
+
     @property
     def webhook_base_url(self) -> str:
         """

@@ -284,10 +284,12 @@ async def save_site_progress_update(request: dict):
     """
     tool_call_id, args = extract_vapi_args(request)
 
-    # Extract call ID
+    # Extract call ID and messages from VAPI request
     vapi_call_id = None
+    messages = []
     if "message" in request and "call" in request["message"]:
         vapi_call_id = request["message"]["call"]["id"]
+        messages = request["message"]["call"].get("messages", [])
 
     try:
         if not vapi_call_id:
@@ -308,6 +310,11 @@ async def save_site_progress_update(request: dict):
             }
 
         logger.info(f"Saving site progress update for site: {site_id}, call: {vapi_call_id}")
+        logger.info(f"Received {len(messages)} messages in request")
+
+        # DEBUG: Log the full request structure to understand what VAPI sends
+        import json
+        logger.info(f"Full request structure: {json.dumps(request, indent=2)[:2000]}")
 
         # Get session context
         session_context = await get_session_context_by_call_id(vapi_call_id)
@@ -327,19 +334,38 @@ async def save_site_progress_update(request: dict):
         tenant_id = session_context["tenant_id"]
         user_id = session_context["user_id"]
 
-        # Extract update data from args
+        # Build full transcript from messages in the VAPI request
+        # VAPI sends the conversation messages directly in the tool call request
+        real_transcript = ""
+        if messages:
+            for msg in messages:
+                role = msg.get("role", "")
+                content = msg.get("content", "") or msg.get("message", "")
+                if content:
+                    if role == "user":
+                        real_transcript += f"User: {content}\n"
+                    elif role == "assistant":
+                        real_transcript += f"Assistant: {content}\n"
+            logger.info(f"Built transcript from {len(messages)} messages (length: {len(real_transcript)})")
+
+        # Fallback to raw_notes from assistant if no messages available
+        if not real_transcript:
+            real_transcript = args.get("raw_notes", "")
+            logger.info(f"No messages in request, using raw_notes from assistant (length: {len(real_transcript)})")
+
+        # Build update data with real transcript
         update_data = {
-            "main_focus": args.get("main_focus"),
-            "is_wet_weather_closure": args.get("is_wet_weather_closure", False),
-            "materials_delivered": args.get("materials_delivered"),
-            "work_progress": args.get("work_progress"),
-            "issues": args.get("issues"),
-            "delays": args.get("delays"),
-            "staffing": args.get("staffing"),
-            "site_visitors": args.get("site_visitors"),
-            "site_conditions": args.get("site_conditions"),
-            "follow_up_actions": args.get("follow_up_actions"),
-            "raw_transcript": args.get("raw_transcript", "")
+            "main_focus": None,  # Will be extracted by AI processor
+            "is_wet_weather_closure": False,  # Will be determined by AI processor
+            "materials_delivered": None,
+            "work_progress": None,
+            "issues": None,
+            "delays": None,
+            "staffing": None,
+            "site_visitors": None,
+            "site_conditions": None,
+            "follow_up_actions": None,
+            "raw_transcript": real_transcript  # Use real conversation transcript
         }
 
         # Process with OpenAI to extract intelligence
@@ -349,15 +375,16 @@ async def save_site_progress_update(request: dict):
         # Generate unique ID for this update
         update_id = str(uuid.uuid4())
 
-        # Combine raw data with AI-processed data
+        # Merge AI-extracted structured fields with the original data
+        # AI processor now returns the full structured data including main_focus, work_progress, etc.
         complete_update = {
             "id": update_id,
             "site_id": site_id,
             "user_id": user_id,
             "tenant_id": tenant_id,
             "vapi_call_id": vapi_call_id,
-            **update_data,
-            **ai_processed,
+            "raw_transcript": real_transcript,  # Store the real tagged transcript
+            **ai_processed,  # AI-extracted data includes all structured fields now
             "processing_status": "completed"
         }
 

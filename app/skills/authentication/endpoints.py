@@ -57,25 +57,35 @@ async def log_vapi_interaction(vapi_call_id: str, interaction_type: str = None,
 async def authenticate_by_phone(request: dict):
     """Authenticate caller by phone number - VAPI Server Tool format"""
 
-    # Extract call ID from VAPI request structure
+    # Extract call ID and phone from VAPI request structure
     vapi_call_id = None
+    caller_phone = None
+
     if "message" in request and "call" in request["message"]:
-        vapi_call_id = request["message"]["call"]["id"]
+        call_data = request["message"]["call"]
+        vapi_call_id = call_data.get("id")
+
+        # Try to get phone from call metadata
+        # VAPI provides customer.number in the call object
+        if "customer" in call_data and "number" in call_data["customer"]:
+            caller_phone = call_data["customer"]["number"]
+            logger.info(f"Extracted phone from VAPI call metadata: {caller_phone}")
 
     tool_call_id, args = extract_vapi_args(request)
 
     try:
-        # Extract arguments with fallbacks
-        caller_phone = args.get("caller_phone")
+        # Fallback to args if not found in metadata
+        if not caller_phone:
+            caller_phone = args.get("caller_phone")
 
         if not vapi_call_id:
             vapi_call_id = args.get("vapi_call_id", "unknown")
 
-        # TEST MODE fallback - use environment variable or hardcoded default
+        # TEST MODE fallback - use environment variable when no phone provided
         if not caller_phone or caller_phone.strip() == "":
             test_phone = os.getenv("TEST_DEFAULT_PHONE", "+61412345678")
             caller_phone = test_phone
-            logger.info(f"No phone provided, defaulting to test number: {caller_phone}")
+            logger.info(f"No phone in call metadata or args, using test default: {caller_phone}")
 
         logger.info(f"Authenticating phone: {caller_phone}, call: {vapi_call_id}, toolCallId: {tool_call_id}")
 

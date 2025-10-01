@@ -265,6 +265,101 @@ async def get_system_status():
             "error": str(e)
         }
     
+@app.post("/api/v1/vapi/end-of-call-report")
+async def handle_end_of_call_report(request: dict):
+    """
+    Handle end-of-call report from VAPI with full transcript
+    This stores the complete call transcript in the database
+    """
+    try:
+        logger.info(f"Received end-of-call report: {json.dumps(request, indent=2)}")
+
+        # Extract call data
+        call = request.get("message", {})
+        call_id = call.get("id")
+        transcript_data = call.get("transcript")
+        messages = call.get("messages", [])
+
+        if not call_id:
+            logger.error("No call ID in end-of-call report")
+            return {"success": False, "error": "Missing call ID"}
+
+        # Build full transcript from messages
+        full_transcript = ""
+        if messages:
+            for msg in messages:
+                role = msg.get("role", "")
+                content = msg.get("content", "") or msg.get("message", "")
+                if content:
+                    if role == "user":
+                        full_transcript += f"User: {content}\n"
+                    elif role == "assistant":
+                        full_transcript += f"Assistant: {content}\n"
+
+        # Store transcript in vapi_logs
+        async with httpx.AsyncClient() as client:
+            # Update the existing vapi_log entry with transcript
+            response = await client.patch(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/vapi_logs",
+                headers={
+                    "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal"
+                },
+                params={"vapi_call_id": f"eq.{call_id}"},
+                json={
+                    "transcript": full_transcript,
+                    "call_duration": call.get("duration"),
+                    "call_ended_at": call.get("endedAt"),
+                    "raw_log_data": request  # Store full payload for reference
+                }
+            )
+
+            if response.status_code in [200, 204]:
+                logger.info(f"Stored transcript for call {call_id}")
+
+                # Update any site_progress_updates with the real transcript
+                update_response = await client.patch(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/site_progress_updates",
+                    headers={
+                        "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                        "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=minimal"
+                    },
+                    params={"vapi_call_id": f"eq.{call_id}"},
+                    json={"raw_transcript": full_transcript}
+                )
+
+                if update_response.status_code in [200, 204]:
+                    logger.info(f"Updated site_progress_updates with real transcript for call {call_id}")
+
+                # Also update voice_notes with real transcript
+                notes_response = await client.patch(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/voice_notes",
+                    headers={
+                        "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                        "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=minimal"
+                    },
+                    params={"vapi_call_id": f"eq.{call_id}"},
+                    json={"full_transcript": full_transcript}
+                )
+
+                if notes_response.status_code in [200, 204]:
+                    logger.info(f"Updated voice_notes with real transcript for call {call_id}")
+
+                return {"success": True}
+            else:
+                logger.error(f"Failed to store transcript: {response.status_code} - {response.text}")
+                return {"success": False, "error": "Failed to store transcript"}
+
+    except Exception as e:
+        logger.error(f"Error handling end-of-call report: {e}")
+        return {"success": False, "error": str(e)}
+
 @app.post("/api/v1/vapi/setup-tools-only")
 async def setup_tools_only():
     """

@@ -19,25 +19,16 @@ class VAPIToolsManager:
     
     async def create_authenticate_caller_tool(self) -> str:
         """Create the authenticate_caller tool and return its ID"""
-        
+
         tool_data = {
             "type": "function",
             "function": {
                 "name": "authenticate_caller",
-                "description": "Authenticate the caller using their phone number and call ID to verify they are authorized to use voice notes",
+                "description": "Authenticate the caller using their phone number from the call metadata to verify they are authorized. The phone number is automatically extracted from the call - no parameters needed.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "caller_phone": {
-                            "type": "string",
-                            "description": "The caller's phone number"
-                        },
-                        #"vapi_call_id": {
-                        #    "type": "string",
-                        #    "description": "The VAPI call identifier"
-                        #}
-                    },
-                    "required": ["caller_phone"]
+                    "properties": {},
+                    "required": []
                 }
             },
             "server": {

@@ -242,7 +242,7 @@ Remember: Fast capture of important site information for busy professionals."""
             "name": "JSMB-Jill-multi-skill-squad",
             "members": [
                 {
-                    "assistant": auth_agent_id,
+                    "assistantId": auth_agent_id,
                     "assistantDestinations": [
                         {
                             "type": "assistant",
@@ -257,10 +257,10 @@ Remember: Fast capture of important site information for busy professionals."""
                     ]
                 },
                 {
-                    "assistant": voice_notes_agent_id
+                    "assistantId": voice_notes_agent_id
                 },
                 {
-                    "assistant": site_progress_agent_id
+                    "assistantId": site_progress_agent_id
                 }
             ]
         }
@@ -285,15 +285,21 @@ Remember: Fast capture of important site information for busy professionals."""
         self,
         existing_squad_id: Optional[str] = None,
         existing_auth_agent_id: Optional[str] = None,
-        existing_voice_notes_agent_id: Optional[str] = None
+        existing_voice_notes_agent_id: Optional[str] = None,
+        existing_site_progress_agent_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Set up the complete site progress system"""
         try:
             # Create tools
             tool_ids = await self.setup_site_progress_tools()
 
-            # Create Site Progress Assistant
-            site_progress_agent_id = await self.create_site_progress_assistant(tool_ids)
+            # Use existing assistant or create new one
+            if existing_site_progress_agent_id:
+                logger.info(f"Using existing site progress assistant: {existing_site_progress_agent_id}")
+                site_progress_agent_id = existing_site_progress_agent_id
+            else:
+                # Create Site Progress Assistant
+                site_progress_agent_id = await self.create_site_progress_assistant(tool_ids)
 
             result = {
                 "success": True,
@@ -338,6 +344,8 @@ def add_site_progress_management_endpoints(app):
                     kwargs["existing_auth_agent_id"] = request["auth_agent_id"]
                 if "voice_notes_agent_id" in request:
                     kwargs["existing_voice_notes_agent_id"] = request["voice_notes_agent_id"]
+                if "site_progress_agent_id" in request:
+                    kwargs["existing_site_progress_agent_id"] = request["site_progress_agent_id"]
 
             result = await manager.setup_complete_site_progress_system(**kwargs)
             return result
