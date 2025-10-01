@@ -43,7 +43,7 @@ class VAPISiteProgressManager:
                 }
             },
             "server": {
-                "url": f"{self.webhook_base_url}/site-updates/identify-site"
+                "url": f"{self.webhook_base_url}/api/v1/skills/site-updates/identify-site"
             }
         }
 
@@ -86,7 +86,7 @@ class VAPISiteProgressManager:
                 }
             },
             "server": {
-                "url": f"{self.webhook_base_url}/site-updates/save-update"
+                "url": f"{self.webhook_base_url}/api/v1/skills/site-updates/save-update"
             }
         }
 
