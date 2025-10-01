@@ -166,7 +166,15 @@ async def main():
 
     # Confirm update
     print(f"\nAbout to update all webhooks to: {new_base_url}")
-    confirm = input("Continue? (y/N): ")
+
+    # Check for --yes flag
+    auto_confirm = '--yes' in sys.argv or '-y' in sys.argv
+
+    if auto_confirm:
+        print("Auto-confirming with --yes flag")
+        confirm = 'y'
+    else:
+        confirm = input("Continue? (y/N): ")
 
     if confirm.lower() != 'y':
         print("Cancelled")
