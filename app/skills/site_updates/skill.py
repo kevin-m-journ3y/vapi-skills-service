@@ -20,8 +20,7 @@ class SiteUpdatesSkill(BaseSkill):
         super().__init__(
             skill_key="site_updates",
             name="Site Progress Updates",
-            description="Record daily site progress updates with structured data collection and AI analysis",
-            version="1.0.0"
+            description="Record daily site progress updates with structured data collection and AI analysis"
         )
 
     def get_required_tools(self) -> List[Dict]:
@@ -126,6 +125,31 @@ class SiteUpdatesSkill(BaseSkill):
         This will be defined in app/assistants/site_progress.py
         """
         return None  # Assistant defined separately
+
+    async def create_tools(self) -> Dict[str, str]:
+        """
+        Create VAPI tools for site updates skill
+
+        Returns:
+            Dict with tool names mapped to VAPI tool IDs
+        """
+        # This skill doesn't create tools via VAPI API - tools are defined via get_required_tools()
+        # and registered with assistants
+        return {}
+
+    async def create_assistant(self, tool_ids: Dict[str, str]) -> str:
+        """
+        Site Updates skill does not create assistants.
+        It only provides tools that assistants can use.
+
+        Raises:
+            NotImplementedError: This skill doesn't create assistants
+        """
+        raise NotImplementedError(
+            "SiteUpdatesSkill does not create assistants. "
+            "It provides tools for assistants to use. "
+            "Use an assistant definition (e.g., SiteProgressAssistant) instead."
+        )
 
     def register_routes(self, app, prefix: str = ""):
         """Register FastAPI routes for this skill"""
