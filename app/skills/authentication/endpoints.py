@@ -56,7 +56,7 @@ async def authenticate_by_phone(request: Request) -> Dict[str, Any]:
                 headers=headers,
                 params={
                     "phone": f"eq.{caller_phone}",
-                    "select": "id,company_name,phone"
+                    "select": "id,name,company_name,phone,tenant_id,tenants(name)"
                 }
             )
 
@@ -66,10 +66,63 @@ async def authenticate_by_phone(request: Request) -> Dict[str, Any]:
                     user = users[0]
                     logger.info(f"User authenticated: {user.get('id')}")
 
+                    # Get user's available skills
+                    skills_response = await client.get(
+                        f"{settings.SUPABASE_URL}/rest/v1/user_skills",
+                        headers=headers,
+                        params={
+                            "user_id": f"eq.{user['id']}",
+                            "is_enabled": "eq.true",
+                            "select": "skills(skill_key,name,description,vapi_assistant_id)"
+                        }
+                    )
+
+                    user_skills = skills_response.json() if skills_response.status_code == 200 else []
+                    available_skills = []
+                    for user_skill in user_skills:
+                        skill = user_skill.get('skills', {})
+                        if skill:
+                            available_skills.append({
+                                "skill_key": skill.get('skill_key'),
+                                "skill_name": skill.get('name'),
+                                "skill_description": skill.get('description', skill.get('name')),
+                                "vapi_assistant_id": skill.get('vapi_assistant_id')
+                            })
+
+                    # Generate dynamic greeting based on available skills
+                    first_name = user.get('name', 'there').split()[0] if user.get('name') else "there"
+
+                    if len(available_skills) == 0:
+                        greeting = f"Hi {first_name}! I don't have any skills configured for you yet. Please contact support."
+                    elif len(available_skills) == 1:
+                        skill_name = available_skills[0].get('skill_name', 'Unknown')
+                        greeting = f"Hi {first_name}! Ready for {skill_name}? Let's get started."
+                    else:
+                        skill_names = [skill.get('skill_name', 'Unknown') for skill in available_skills]
+                        if len(skill_names) == 2:
+                            greeting = f"Hi {first_name}! I can help you with {skill_names[0]} or {skill_names[1]}. What would you like to do?"
+                        else:
+                            skills_text = ", ".join(skill_names[:-1]) + f", or {skill_names[-1]}"
+                            greeting = f"Hi {first_name}! I can help you with {skills_text}. What would you like to do?"
+
+                    logger.info(f"Successfully authenticated {user.get('name')} with {len(available_skills)} skills")
+
                     return {
                         "results": [{
                             "toolCallId": data.get("message", {}).get("toolCallId"),
-                            "result": f"Authenticated as {user.get('company_name', 'user')}. User ID: {user.get('id')}"
+                            "result": {
+                                "authorized": True,
+                                "user_id": user['id'],
+                                "user_name": user.get('name'),
+                                "first_name": first_name,
+                                "company_name": user.get('company_name'),
+                                "tenant_name": user.get('tenants', {}).get('name') if user.get('tenants') else None,
+                                "phone_number": user.get('phone'),
+                                "greeting_message": greeting,
+                                "available_skills": available_skills,
+                                "skill_count": len(available_skills),
+                                "single_skill_mode": len(available_skills) == 1
+                            }
                         }]
                     }
 
@@ -77,7 +130,10 @@ async def authenticate_by_phone(request: Request) -> Dict[str, Any]:
             return {
                 "results": [{
                     "toolCallId": data.get("message", {}).get("toolCallId"),
-                    "result": "Authentication failed: Phone number not registered"
+                    "result": {
+                        "authorized": False,
+                        "message": "Authentication failed: Phone number not registered"
+                    }
                 }]
             }
 

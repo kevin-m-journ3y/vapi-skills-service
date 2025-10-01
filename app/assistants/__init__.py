@@ -5,6 +5,7 @@ Assistants define personality, voice, conversation flow, and which tools/skills 
 """
 
 from .base_assistant import BaseAssistant
+from .greeter import GreeterAssistant
 from .jill_voice_notes import JillVoiceNotesAssistant
 
-__all__ = ['BaseAssistant', 'JillVoiceNotesAssistant']
+__all__ = ['BaseAssistant', 'GreeterAssistant', 'JillVoiceNotesAssistant']
