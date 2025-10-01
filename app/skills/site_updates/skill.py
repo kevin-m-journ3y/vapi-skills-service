@@ -154,8 +154,10 @@ class SiteUpdatesSkill(BaseSkill):
     def register_routes(self, app, prefix: str = ""):
         """Register FastAPI routes for this skill"""
         from app.skills.site_updates.endpoints import router
+        import logging
+        logger = logging.getLogger(__name__)
         app.include_router(router, prefix=prefix, tags=["site-updates"])
-        self.logger.info(f"Registered Site Updates routes with prefix: {prefix}")
+        logger.info(f"Registered Site Updates routes with prefix: {prefix}")
 
     def validate_user_access(self, user_id: str, tenant_id: str) -> bool:
         """

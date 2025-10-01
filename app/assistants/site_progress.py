@@ -31,7 +31,7 @@ class SiteProgressAssistant(BaseAssistant):
             assistant_key="site_progress",
             name="Site Progress Assistant",
             description="Guides users through daily site progress updates",
-            version="1.0.0"
+            required_skills=["site_updates"]
         )
 
     def get_system_prompt(self) -> str:
