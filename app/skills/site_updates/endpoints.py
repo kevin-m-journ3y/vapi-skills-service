@@ -67,6 +67,8 @@ async def identify_site_for_update(request: dict):
     """
     Identify which site the user wants to provide an update for
     Uses AI to match user's description to available sites in their tenant
+
+    Can be called without site_description to get the list of available sites
     """
     try:
         # Extract VAPI arguments
@@ -80,9 +82,9 @@ async def identify_site_for_update(request: dict):
         if not vapi_call_id:
             vapi_call_id = tool_call_id
 
-        user_input = args.get("user_input", "")
+        site_description = args.get("site_description", "")
 
-        logger.info(f"Identifying site for update. Call: {vapi_call_id}, Input: {user_input}")
+        logger.info(f"Identifying site for update. Call: {vapi_call_id}, Input: {site_description}")
 
         # Get session context
         session_context = await get_session_context_by_call_id(vapi_call_id)
@@ -130,6 +132,29 @@ async def identify_site_for_update(request: dict):
 
             sites = sites_response.json()
 
+            # If no site_description provided, return the list of available sites
+            if not site_description or site_description.strip() == "":
+                site_list_for_assistant = [
+                    {
+                        "site_id": site['id'],
+                        "site_name": site['name'],
+                        "site_identifier": site.get('identifier'),
+                        "site_address": site.get('address')
+                    }
+                    for site in sites
+                ]
+
+                return {
+                    "results": [{
+                        "toolCallId": tool_call_id,
+                        "result": {
+                            "site_identified": False,
+                            "sites_list": site_list_for_assistant,
+                            "message": f"You have {len(sites)} sites available for updates."
+                        }
+                    }]
+                }
+
             # Use OpenAI to match user input to available sites
             site_list = "\n".join([
                 f"- ID: {site['id']}, Name: {site['name']}, Identifier: {site.get('identifier', 'None')}, Address: {site.get('address', 'None')}"
@@ -140,7 +165,7 @@ async def identify_site_for_update(request: dict):
 Available construction sites:
 {site_list}
 
-User said: "{user_input}"
+User said: "{site_description}"
 
 Which site are they referring to? You MUST use the exact ID from the list above. Return JSON only:
 {{
