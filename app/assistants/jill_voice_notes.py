@@ -23,7 +23,7 @@ class JillVoiceNotesAssistant(BaseAssistant):
     def __init__(self):
         super().__init__(
             assistant_key="jill-voice-notes",
-            name="Jill Voice Notes",
+            name="JSMB-Jill-voice-notes",
             description="Professional voice notes assistant for construction companies",
             required_skills=["authentication", "voice_notes"]
         )

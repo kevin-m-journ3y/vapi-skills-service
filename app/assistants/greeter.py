@@ -26,7 +26,7 @@ class GreeterAssistant(BaseAssistant):
     def __init__(self):
         super().__init__(
             assistant_key="greeter",
-            name="Universal Greeter",
+            name="JSMB-Jill-authenticate-and-greet",
             description="Authenticates users and dynamically routes to their available skills",
             required_skills=["authentication"]
         )

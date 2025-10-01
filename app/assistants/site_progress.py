@@ -29,7 +29,7 @@ class SiteProgressAssistant(BaseAssistant):
     def __init__(self):
         super().__init__(
             assistant_key="site_progress",
-            name="Site Progress Assistant",
+            name="JSMB-Jill-site-progress",
             description="Guides users through daily site progress updates",
             required_skills=["site_updates"]
         )

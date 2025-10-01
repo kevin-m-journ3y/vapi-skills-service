@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from typing import Dict, Any, Optional
 import logging
 import httpx
+import os
 
 from app.vapi_utils import extract_vapi_args
 from app.config import settings
@@ -70,9 +71,10 @@ async def authenticate_by_phone(request: dict):
         if not vapi_call_id:
             vapi_call_id = args.get("vapi_call_id", "unknown")
 
-        # TEST MODE fallback
+        # TEST MODE fallback - use environment variable or hardcoded default
         if not caller_phone or caller_phone.strip() == "":
-            caller_phone = "+61412345678"
+            test_phone = os.getenv("TEST_DEFAULT_PHONE", "+61412345678")
+            caller_phone = test_phone
             logger.info(f"No phone provided, defaulting to test number: {caller_phone}")
 
         logger.info(f"Authenticating phone: {caller_phone}, call: {vapi_call_id}, toolCallId: {tool_call_id}")
