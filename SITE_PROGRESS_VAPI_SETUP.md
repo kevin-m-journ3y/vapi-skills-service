@@ -213,15 +213,48 @@ curl -X POST https://your-domain.com/site-updates/save-update \
 
 ## Expected User Flow
 
-1. **User calls** → Auth Assistant authenticates
-2. **Auth Assistant**: "Hi John! I can help you with voice notes or site progress updates. What would you like to do?"
+### Scenario 1: User knows the site name
+1. **User calls** → Auth Assistant authenticates via phone
+2. **Auth**: "Hi John! I can help you with voice notes or site progress updates. What would you like to do?"
 3. **User**: "I need to log a site update"
-4. **Transfers to Site Progress Assistant**
+4. **Seamlessly transfers** → Site Progress Assistant
 5. **Site Progress**: "Hi! Ready to log your site progress for today. Which site are you updating?"
 6. **User**: "The ocean house project"
-7. **Site Progress**: *Calls identify_site_for_update* → "Great! Logging progress for Ocean White House. What updates do you have?"
-8. **User**: *Provides natural description of deliveries, issues, progress*
-9. **Site Progress**: *Calls save_site_progress_update with raw notes* → "Got it! Your site progress update for Ocean White House has been recorded."
+7. **Site Progress**: *Calls identify_site_for_update(site_description="ocean house project")* → Fuzzy matches to tenant's sites
+8. **Site Progress**: "Great! What updates do you have for Ocean White House today?"
+9. **User**: *Provides natural description of deliveries, issues, progress*
+10. **Site Progress**: *Calls save_site_progress_update with site_id and raw_notes* → "Got it! Your site progress update for Ocean White House has been recorded."
+
+### Scenario 2: User doesn't know which sites they can update
+1. **User calls** → Auth Assistant authenticates
+2. **Auth**: "Hi Sarah! I can help you with voice notes or site progress updates. What would you like to do?"
+3. **User**: "I need to log a site update"
+4. **Seamlessly transfers** → Site Progress Assistant
+5. **Site Progress**: "Hi! Ready to log your site progress for today. Which site are you updating?"
+6. **User**: "What sites can I update?"
+7. **Site Progress**: *Calls identify_site_for_update(site_description="")* → Returns list of sites for user's tenant
+8. **Site Progress**: "You can update: Ocean White House, Bayside Apartments, or Downtown Plaza. Which one?"
+9. **User**: "Bayside Apartments"
+10. **Site Progress**: *Calls identify_site_for_update(site_description="Bayside Apartments")* → Matches site
+11. **Site Progress**: "Great! What updates do you have for Bayside Apartments today?"
+12. **User**: *Provides updates*
+13. **Site Progress**: *Saves update* → "Got it! Your update for Bayside Apartments has been recorded."
+
+### Authentication Context Flow
+
+The system automatically passes user context between assistants:
+
+1. **Auth Assistant** stores context in `vapi_logs` table:
+   - `vapi_call_id` (unique per call)
+   - `user_id` and `tenant_id` (from phone lookup)
+   - `caller_phone`
+   - User and tenant names
+
+2. **Site Progress Assistant** retrieves context:
+   - Uses `vapi_call_id` from VAPI request
+   - Queries `vapi_logs` for authentication record
+   - Fetches sites filtered by `tenant_id`
+   - No need to re-authenticate or pass credentials
 
 ## Webhook Endpoints
 
