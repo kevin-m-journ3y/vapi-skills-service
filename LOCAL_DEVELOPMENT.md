@@ -1,17 +1,23 @@
 # Local Development Guide
 
-## Quick Start
+## 🚀 Quick Start - 3 Terminal Windows Required
 
-### Terminal 1: Run FastAPI Server
+**IMPORTANT:** All commands run in the **foreground** so you can see real-time output!
+
+---
+
+## Terminal 1: FastAPI Server 🖥️
+
+**Keep this terminal window visible** - you'll see all VAPI requests here!
+
 ```bash
 cd /Users/kevinmorrell/projects/vapi-skills-system
 source venv/bin/activate
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-You'll see output like:
+**What you'll see:**
 ```
-INFO:     Will watch for changes in these directories: ['/Users/kevinmorrell/projects/vapi-skills-system']
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
 INFO:app.main:Initializing skill-based architecture...
 INFO:app.skills.base_skill:Initialized skill: Voice Notes (voice_notes)
@@ -21,34 +27,65 @@ INFO:     Started server process [12345]
 INFO:     Application startup complete.
 ```
 
-### Terminal 2: Run Cloudflare Tunnel
+**✅ Leave this running!** Every VAPI request will show up here.
+
+---
+
+## Terminal 2: Cloudflare Tunnel 🌐
+
+**Keep this terminal window visible** - you'll see tunnel status here!
+
 ```bash
 cloudflared tunnel --url http://localhost:8000
 ```
 
-You'll see your tunnel URL:
+**What you'll see:**
 ```
-Your quick Tunnel has been created! Visit it at:
+Your quick Tunnel has been created! Visit it at (it may take some time to be reachable):
 https://random-words-123.trycloudflare.com
 ```
 
-**Copy this URL!** You'll need it to update VAPI webhooks.
+**📋 COPY THE URL ABOVE!** You need it for the next step.
 
-### Terminal 3: Update Configuration
+**✅ Leave this running!** The tunnel stays active while this is running.
 
-1. Edit `.env` and update `DEV_WEBHOOK_BASE_URL`:
+---
+
+## Terminal 3: Setup & Testing 🔧
+
+**Use this terminal for commands** while the other two keep running.
+
+### Step 1: Update .env with your tunnel URL
+
+Edit `.env` file and replace the tunnel URL:
 ```bash
 DEV_WEBHOOK_BASE_URL=https://random-words-123.trycloudflare.com
 ```
+(Use the URL from Terminal 2)
 
-2. Restart your FastAPI server (Ctrl+C in Terminal 1, then restart)
+### Step 2: Restart FastAPI Server
 
-3. Update VAPI webhooks:
+In **Terminal 1**, press `Ctrl+C` to stop, then run the command again:
 ```bash
-python scripts/update_webhooks.py https://random-words-123.trycloudflare.com
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-## Testing
+### Step 3: Update VAPI Webhooks
+
+In **Terminal 3**, run:
+```bash
+source venv/bin/activate
+python scripts/update_webhooks.py https://random-words-123.trycloudflare.com
+```
+(Replace with your URL from Terminal 2)
+
+Type `y` when prompted to confirm.
+
+**✅ Done!** VAPI will now call your local machine.
+
+---
+
+## 🧪 Testing (in Terminal 3)
 
 ### Test Local Server
 ```bash
