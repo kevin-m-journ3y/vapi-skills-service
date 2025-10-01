@@ -15,6 +15,7 @@ import json
 from app.vapi_voice_notes import VoiceNotesVAPISystem, add_voice_notes_management_endpoints, VAPIConfig
 from app.vapi_tools_setup import VAPIToolsManager
 from app.vapi_utils import vapi_tool, extract_vapi_args
+from app.vapi_site_progress_setup import add_site_progress_management_endpoints
 
 # NEW: Import skill-based architecture
 from app.skills import skill_registry
@@ -80,6 +81,7 @@ if os.getenv("VAPI_API_KEY"):
         os.getenv("WEBHOOK_BASE_URL", "https://journ3y-vapi-skills-service.up.railway.app")
     )
     add_voice_notes_management_endpoints(app, voice_notes_system)
+    add_site_progress_management_endpoints(app)
 
 # Add CORS middleware
 app.add_middleware(
