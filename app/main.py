@@ -16,12 +16,39 @@ from app.vapi_voice_notes import VoiceNotesVAPISystem, add_voice_notes_managemen
 from app.vapi_tools_setup import VAPIToolsManager
 from app.vapi_utils import vapi_tool, extract_vapi_args
 
+# NEW: Import skill-based architecture
+from app.skills import skill_registry
+from app.skills.voice_notes import VoiceNotesSkill
+
 # Load environment variables from .env file
 load_dotenv()
 
+# Set up logging early
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="Multi-Tenant Document RAG + VAPI Skills System", version="1.0.0")
 
+# ============================================
+# NEW SKILL-BASED ARCHITECTURE
+# ============================================
 
+# Register skills with the registry
+if os.getenv("VAPI_API_KEY"):
+    logger.info("Initializing skill-based architecture...")
+
+    # Register VoiceNotesSkill
+    voice_notes_skill = VoiceNotesSkill()
+    skill_registry.register(voice_notes_skill)
+
+    # Register all skill routes with the app
+    skill_registry.register_all_routes(app)
+
+    logger.info(f"Registered {len(skill_registry.skills)} skills")
+
+# ============================================
+# LEGACY VAPI SYSTEM (DEPRECATED - for backward compatibility)
+# ============================================
 
 if os.getenv("VAPI_API_KEY"):
     vapi_config = VAPIConfig(
@@ -29,7 +56,7 @@ if os.getenv("VAPI_API_KEY"):
         phone_number_id=os.getenv("VAPI_PHONE_NUMBER_ID")
     )
     voice_notes_system = VoiceNotesVAPISystem(
-        vapi_config, 
+        vapi_config,
         os.getenv("WEBHOOK_BASE_URL", "https://journ3y-vapi-skills-service.up.railway.app")
     )
     add_voice_notes_management_endpoints(app, voice_notes_system)
@@ -42,10 +69,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
 # ============================================
@@ -282,20 +305,49 @@ async def cleanup_tools():
 
 
 # ============================================
+# SKILL REGISTRY ENDPOINTS
+# ============================================
+
+@app.get("/api/v1/skills/list")
+async def list_skills():
+    """List all registered skills and their status"""
+    return {
+        "success": True,
+        "skills": skill_registry.list_skills(),
+        "total": len(skill_registry.skills)
+    }
+
+@app.post("/api/v1/skills/setup-all")
+async def setup_all_skills():
+    """Set up all registered skills (create tools and assistants)"""
+    results = await skill_registry.setup_all_skills()
+    return {
+        "success": True,
+        "results": results
+    }
+
+@app.post("/api/v1/skills/{skill_key}/setup")
+async def setup_skill(skill_key: str):
+    """Set up a specific skill"""
+    result = await skill_registry.setup_skill(skill_key)
+    return result
+
+# ============================================
 # ENVIRONMENT CHECK ENDPOINT
 # ============================================
 
 @app.get("/debug/env-check")
 async def check_environment():
     """Check if environment variables are properly set"""
+    from app.config import settings
     return {
         "supabase_url": (os.getenv('SUPABASE_URL')[:50] + "...") if os.getenv('SUPABASE_URL') else "NOT SET",
         "supabase_service_key": "SET" if os.getenv('SUPABASE_SERVICE_KEY') else "NOT SET",
         "openai_api_key": "SET" if os.getenv('OPENAI_API_KEY') else "NOT SET",
         "google_service_account": "SET" if os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON') else "NOT SET",
         "vapi_api_key": "SET" if os.getenv('VAPI_API_KEY') else "NOT SET",
-        "webhook_base_url": os.getenv('WEBHOOK_BASE_URL') or "NOT SET",
-        "environment": os.getenv('ENVIRONMENT', 'NOT SET'),
+        "webhook_base_url": settings.webhook_base_url,
+        "environment": settings.ENVIRONMENT,
         "python_path": os.getcwd()
     }
 
