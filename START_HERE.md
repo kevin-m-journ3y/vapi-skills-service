@@ -38,8 +38,32 @@ python scripts/update_webhooks.py https://xyz.trycloudflare.com
 
 ---
 
+## 🧪 Test Everything Works
+
+Before making changes, verify everything is working:
+```bash
+# Run all tests (starts/stops server automatically)
+python scripts/run_tests.py
+```
+
+**Expected output:**
+```
+✓ Server started successfully
+✓ Server Health
+✓ Skills List
+✓ ALL TESTS PASSED (21/21)
+```
+
+See [TESTING.md](TESTING.md) for testing guide.
+
+---
+
 ## ✅ You're Ready!
 
 Now make a VAPI call and watch the magic happen in Terminal 1!
 
-See [LOCAL_DEVELOPMENT.md](LOCAL_DEVELOPMENT.md) for full documentation.
+**Documentation:**
+- [START_HERE.md](START_HERE.md) - This quick start guide
+- [LOCAL_DEVELOPMENT.md](LOCAL_DEVELOPMENT.md) - Full development workflow
+- [TESTING.md](TESTING.md) - Running and writing tests
+- [CLOUDFLARE_TUNNEL_SETUP.md](CLOUDFLARE_TUNNEL_SETUP.md) - Tunnel setup guide
