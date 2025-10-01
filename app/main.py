@@ -20,7 +20,8 @@ from app.vapi_utils import vapi_tool, extract_vapi_args
 from app.skills import skill_registry
 from app.skills.voice_notes import VoiceNotesSkill
 from app.skills.authentication import AuthenticationSkill
-from app.assistants import GreeterAssistant, JillVoiceNotesAssistant
+from app.skills.site_updates import SiteUpdatesSkill
+from app.assistants import GreeterAssistant, JillVoiceNotesAssistant, SiteProgressAssistant
 
 # Load environment variables from .env file
 load_dotenv()
@@ -46,12 +47,18 @@ if os.getenv("VAPI_API_KEY"):
     voice_notes_skill = VoiceNotesSkill()
     skill_registry.register_skill(voice_notes_skill)
 
+    site_updates_skill = SiteUpdatesSkill()
+    skill_registry.register_skill(site_updates_skill)
+
     # Register Assistants
     greeter_assistant = GreeterAssistant()
     skill_registry.register_assistant(greeter_assistant)
 
     jill_assistant = JillVoiceNotesAssistant()
     skill_registry.register_assistant(jill_assistant)
+
+    site_progress_assistant = SiteProgressAssistant()
+    skill_registry.register_assistant(site_progress_assistant)
 
     # Register all skill routes with the app
     skill_registry.register_all_routes(app)
