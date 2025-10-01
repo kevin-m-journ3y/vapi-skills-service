@@ -19,6 +19,8 @@ from app.vapi_utils import vapi_tool, extract_vapi_args
 # NEW: Import skill-based architecture
 from app.skills import skill_registry
 from app.skills.voice_notes import VoiceNotesSkill
+from app.skills.authentication import AuthenticationSkill
+from app.assistants import JillVoiceNotesAssistant
 
 # Load environment variables from .env file
 load_dotenv()
@@ -33,18 +35,26 @@ app = FastAPI(title="Multi-Tenant Document RAG + VAPI Skills System", version="1
 # NEW SKILL-BASED ARCHITECTURE
 # ============================================
 
-# Register skills with the registry
+# Register skills and assistants with the registry
 if os.getenv("VAPI_API_KEY"):
     logger.info("Initializing skill-based architecture...")
 
-    # Register VoiceNotesSkill
+    # Register Skills
+    authentication_skill = AuthenticationSkill()
+    skill_registry.register_skill(authentication_skill)
+
     voice_notes_skill = VoiceNotesSkill()
-    skill_registry.register(voice_notes_skill)
+    skill_registry.register_skill(voice_notes_skill)
+
+    # Register Assistants
+    jill_assistant = JillVoiceNotesAssistant()
+    skill_registry.register_assistant(jill_assistant)
 
     # Register all skill routes with the app
     skill_registry.register_all_routes(app)
 
-    logger.info(f"Registered {len(skill_registry.skills)} skills")
+    logger.info(f"Registered {len(skill_registry.skills)} skills and "
+               f"{len(skill_registry.assistants)} assistants")
 
 # ============================================
 # LEGACY VAPI SYSTEM (DEPRECATED - for backward compatibility)

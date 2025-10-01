@@ -1,7 +1,8 @@
 """
 Voice Notes Skill
 
-Allows users to record general or site-specific voice notes through natural conversation.
+Provides tools for recording general or site-specific voice notes.
+This skill only defines tools - it does not create assistants.
 """
 
 from typing import Dict, Optional
@@ -19,10 +20,12 @@ class VoiceNotesSkill(BaseSkill):
     """
     Voice Notes Skill - Record general and site-specific voice notes
 
-    This skill provides:
-    - authenticate_caller: Verify user by phone number
+    This skill provides tools only:
     - identify_context: Determine if note is general or site-specific
     - save_note: Store the voice note in the database
+
+    Note: This skill does not create assistants. Use an assistant definition
+    to orchestrate these tools.
     """
 
     def __init__(self):
@@ -48,26 +51,6 @@ class VoiceNotesSkill(BaseSkill):
         logger.info("Creating VAPI tools for Voice Notes skill...")
 
         tools_config = {
-            "authenticate_caller": {
-                "type": "function",
-                "function": {
-                    "name": "authenticate_caller",
-                    "description": "Authenticate the caller using their phone number to verify they are authorized",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "caller_phone": {
-                                "type": "string",
-                                "description": "The caller's phone number"
-                            }
-                        },
-                        "required": ["caller_phone"]
-                    }
-                },
-                "server": {
-                    "url": f"{self.webhook_base_url}/api/v1/vapi/authenticate-by-phone"
-                }
-            },
             "identify_context": {
                 "type": "function",
                 "function": {
@@ -187,79 +170,17 @@ class VoiceNotesSkill(BaseSkill):
 
     async def create_assistant(self, tool_ids: Dict[str, str]) -> str:
         """
-        Create VAPI assistant for voice notes skill
+        Voice Notes skill does not create assistants.
+        It only provides tools that assistants can use.
 
-        Args:
-            tool_ids: Dictionary of tool names to VAPI tool IDs
-
-        Returns:
-            VAPI assistant ID
+        Raises:
+            NotImplementedError: This skill doesn't create assistants
         """
-        logger.info("Creating VAPI assistant for Voice Notes skill...")
-
-        assistant_config = {
-            "name": "JSMB-Jill-voice-notes",
-            "model": {
-                "provider": "openai",
-                "model": "gpt-4",
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": """You are Jill, a professional voice notes assistant for construction companies.
-
-Your job is to help users record voice notes efficiently and naturally.
-
-CONVERSATION FLOW:
-1. Greet warmly: "Hi! I'm ready to record your voice note. What would you like to record?"
-2. Ask if this note relates to a specific construction site or is general
-3. If site-specific, identify which site using identify_context
-4. Listen to their complete note/message
-5. When they're finished, confirm and save using save_note
-
-CONVERSATION STYLE:
-- Natural, warm, and efficient
-- Let them speak freely - don't interrupt
-- Ask clarifying questions only if needed
-- Signal when you're ready to save: "Got it! Let me save that note for you."
-
-Remember: You're helping capture important information quickly and accurately for any construction company."""
-                    }
-                ],
-                "toolIds": [
-                    tool_ids["identify_context"],
-                    tool_ids["save_note"]
-                ]
-            },
-            "voice": {
-                "model": "eleven_turbo_v2_5",
-                "voiceId": "MiueK1FXuZTCItgbQwPu",
-                "provider": "11labs",
-                "stability": 0.5,
-                "similarityBoost": 0.75
-            },
-            "firstMessage": "Hi! I'm ready to record your voice note. What would you like to record?",
-            "firstMessageMode": "assistant-speaks-first"
-        }
-
-        headers = {
-            "Authorization": f"Bearer {self.vapi_api_key}",
-            "Content-Type": "application/json"
-        }
-
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.vapi_base_url}/assistant",
-                headers=headers,
-                json=assistant_config
-            )
-
-            if response.status_code == 201:
-                assistant = response.json()
-                logger.info(f"Created assistant: {assistant['id']}")
-                return assistant['id']
-            else:
-                logger.error(f"Failed to create assistant: {response.status_code} - {response.text}")
-                raise Exception(f"Assistant creation failed: {response.text}")
+        raise NotImplementedError(
+            "VoiceNotesSkill does not create assistants. "
+            "It provides tools for assistants to use. "
+            "Use an assistant definition (e.g., JillVoiceNotesAssistant) instead."
+        )
 
     def register_routes(self, app: FastAPI, prefix: str = ""):
         """
