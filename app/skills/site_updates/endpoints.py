@@ -312,10 +312,6 @@ async def save_site_progress_update(request: dict):
         logger.info(f"Saving site progress update for site: {site_id}, call: {vapi_call_id}")
         logger.info(f"Received {len(messages)} messages in request")
 
-        # DEBUG: Log the full request structure to understand what VAPI sends
-        import json
-        logger.info(f"Full request structure: {json.dumps(request, indent=2)[:2000]}")
-
         # Get session context
         session_context = await get_session_context_by_call_id(vapi_call_id)
 
