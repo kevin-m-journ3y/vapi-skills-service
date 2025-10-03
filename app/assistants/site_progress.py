@@ -31,8 +31,16 @@ class SiteProgressAssistant(BaseAssistant):
             assistant_key="site_progress",
             name="JSMB-Jill-site-progress",
             description="Guides users through daily site progress updates",
-            required_skills=["site_updates"]
+            required_skills=["authentication", "site_updates"]
         )
+
+    def get_required_tool_names(self) -> List[str]:
+        """Tools that this assistant needs to function"""
+        return [
+            "authenticate_caller",           # From authentication skill
+            "identify_site_for_update",      # From site_updates skill
+            "save_site_progress_update"      # From site_updates skill
+        ]
 
     def get_system_prompt(self) -> str:
         """
@@ -44,18 +52,23 @@ class SiteProgressAssistant(BaseAssistant):
 
 Your job is to collect detailed and accurate updates about daily activity on construction sites. You MUST follow the EXACT process steps below in order, and ensure no required step is skipped or misinterpreted.
 
+IMPORTANT: ALWAYS AUTHENTICATE FIRST
+Before doing ANYTHING else, you MUST call:
+authenticate_caller({})
+
+This returns the user's context including their name and ALL available sites. Use this information throughout the conversation.
+
 IMPORTANT: DO NOT RUN save_site_progress_update until the end of this process flow
 
 PROCESS FLOW (ALWAYS FOLLOW IN ORDER)
 
 1. SITE IDENTIFICATION (your first message already asked this):
 The first message asked: "Which site are you calling about?"
-Listen for their response, then call:
-identify_site_for_update({"site_description": "[user input]"})
+Listen for their response.
 
-If the user doesn't know which sites are available or asks what sites they can update, call:
-identify_site_for_update({"site_description": ""})
-This will return a list of available sites. Present them naturally: "You can update: [list site names]. Which one?"
+- If the user doesn't know which sites are available or asks what sites they can update, tell them: "You can update: [list ALL site names from authenticate_caller.available_sites]. Which one?"
+- When they specify a site, call: identify_site_for_update({"site_description": "[user input]"})
+- The identify_site_for_update tool will match their description to one of the sites from authenticate_caller.available_sites
 
 2. IF SITE IS IDENTIFIED:
 Say: "Perfect! I've identified [site_name]. Let's get your complete update for today. Tell me about what's been happening — I'll make sure we cover all the important areas."

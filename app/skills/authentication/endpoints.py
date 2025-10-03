@@ -132,19 +132,7 @@ async def authenticate_by_phone(request: dict):
             user = users[0]
             logger.info(f"Found user: {user}")
 
-            # Log this authentication for session context
-            await log_vapi_interaction(
-                vapi_call_id=vapi_call_id,
-                interaction_type="authentication",
-                user_id=user['id'],
-                tenant_id=user['tenant_id'],
-                caller_phone=caller_phone,
-                details={
-                    "user_name": user['name'],
-                    "tenant_name": user['tenants']['name'],
-                    "auth_success": True
-                }
-            )
+            # Note: Log will be updated after we fetch skills and sites
 
             # Get skills
             skills_response = await client.get(
@@ -171,6 +159,32 @@ async def authenticate_by_phone(request: dict):
                     "vapi_assistant_id": skill.get('vapi_assistant_id')
                 })
 
+            # Get all active sites for this tenant
+            sites_response = await client.get(
+                f"{settings.SUPABASE_URL}/rest/v1/entities",
+                headers={
+                    "apikey": settings.SUPABASE_SERVICE_KEY,
+                    "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}"
+                },
+                params={
+                    "tenant_id": f"eq.{user['tenant_id']}",
+                    "entity_type": "eq.sites",
+                    "is_active": "eq.true",
+                    "select": "id,name,identifier,address"
+                }
+            )
+
+            available_sites = []
+            if sites_response.status_code == 200:
+                sites = sites_response.json()
+                for site in sites:
+                    available_sites.append({
+                        "site_id": site['id'],
+                        "site_name": site['name'],
+                        "site_identifier": site.get('identifier'),
+                        "site_address": site.get('address')
+                    })
+
             # Generate greeting
             first_name = user['name'].split()[0] if user['name'] else "there"
 
@@ -187,9 +201,28 @@ async def authenticate_by_phone(request: dict):
                     skills_text = ", ".join(skill_names[:-1]) + f", or {skill_names[-1]}"
                     greeting = f"Hi {first_name}! I can help you with {skills_text}. What would you like to do?"
 
-            logger.info(f"Successfully authenticated {user['name']} with {len(available_skills)} skills")
+            logger.info(f"Successfully authenticated {user['name']} with {len(available_skills)} skills and {len(available_sites)} sites")
 
-            # Return VAPI-compatible response
+            # Log this authentication with full context for session
+            await log_vapi_interaction(
+                vapi_call_id=vapi_call_id,
+                interaction_type="authentication",
+                user_id=user['id'],
+                tenant_id=user['tenant_id'],
+                caller_phone=caller_phone,
+                details={
+                    "user_name": user['name'],
+                    "user_role": user.get('role'),
+                    "tenant_name": user['tenants']['name'],
+                    "tenant_id": user['tenant_id'],
+                    "auth_success": True,
+                    "available_skills": available_skills,
+                    "available_sites": available_sites,
+                    "site_count": len(available_sites)
+                }
+            )
+
+            # Return VAPI-compatible response with enriched context
             return {
                 "results": [{
                     "toolCallId": tool_call_id,
@@ -198,12 +231,16 @@ async def authenticate_by_phone(request: dict):
                         "user_id": user['id'],
                         "user_name": user['name'],
                         "first_name": first_name,
+                        "user_role": user.get('role', 'user'),
+                        "tenant_id": user['tenant_id'],
                         "tenant_name": user['tenants']['name'],
                         "phone_number": user['phone_number'],
                         "greeting_message": greeting,
                         "available_skills": available_skills,
                         "skill_count": len(available_skills),
-                        "single_skill_mode": len(available_skills) == 1
+                        "single_skill_mode": len(available_skills) == 1,
+                        "available_sites": available_sites,
+                        "site_count": len(available_sites)
                     }
                 }]
             }
