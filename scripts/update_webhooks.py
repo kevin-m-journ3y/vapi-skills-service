@@ -90,11 +90,13 @@ class WebhookUpdater:
     async def update_all_webhooks(self, new_base_url: str) -> None:
         """Update all known tool webhooks to new base URL"""
 
-        # Known tool endpoints
+        # Known tool endpoints (with JSMB-Jill prefix)
         tool_endpoints = {
-            'authenticate_caller': '/api/v1/vapi/authenticate-by-phone',
-            'identify_context': '/api/v1/skills/voice-notes/identify-context',
-            'save_note': '/api/v1/skills/voice-notes/save-note'
+            'JSMB-Jill-authenticate_caller': '/api/v1/vapi/authenticate-by-phone',
+            'JSMB-Jill-identify_context': '/api/v1/skills/voice-notes/identify-context',
+            'JSMB-Jill-save_note': '/api/v1/skills/voice-notes/save-note',
+            'JSMB-Jill-identify_site_for_update': '/api/v1/skills/site-updates/identify-site',
+            'JSMB-Jill-save_site_progress_update': '/api/v1/skills/site-updates/save-update'
         }
 
         print(f"\nUpdating webhooks to base URL: {new_base_url}")
