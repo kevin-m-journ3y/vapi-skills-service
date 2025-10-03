@@ -103,6 +103,16 @@ class BaseAssistant(ABC):
         """
         return []
 
+    def get_server_config(self) -> Optional[Dict]:
+        """
+        Get server configuration for webhooks.
+        Override this in subclass if webhooks are needed.
+
+        Returns:
+            Server config dictionary or None
+        """
+        return None
+
     async def create(self, tool_ids: Dict[str, str]) -> str:
         """
         Create VAPI assistant with specified tools
@@ -141,6 +151,12 @@ class BaseAssistant(ABC):
             "firstMessage": self.get_first_message(),
             "firstMessageMode": "assistant-speaks-first"
         }
+
+        # Add server config if available
+        server_config = self.get_server_config()
+        if server_config:
+            assistant_config["server"] = server_config
+            assistant_config["serverMessages"] = ["end-of-call-report"]
 
         headers = {
             "Authorization": f"Bearer {self.vapi_api_key}",

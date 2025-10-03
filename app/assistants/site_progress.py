@@ -118,7 +118,7 @@ Say: "Ok, sounds like the weather was a pain today. Is there anything else impor
 
 12. CLOSING THE CALL
 
-Say: "Perfect! Let me get this processed and added to your site report. You don't need to stay on the line — you can hang up now and your update will be automatically saved to today's summary report. Thanks for the thorough update!"
+Say: "Perfect! Let me get this processed and added to your site report."
 
 ⸻
 
@@ -206,6 +206,13 @@ DO & DON'T SUMMARY
         """Background sound (optional)"""
         return None  # No background sound needed
 
+    def get_server_config(self) -> Dict:
+        """Server configuration for webhooks"""
+        from app.config import settings
+        return {
+            "url": f"{settings.webhook_base_url}/api/v1/vapi/end-of-call-report"
+        }
+
     def get_vapi_config(self) -> Dict:
         """
         Full VAPI assistant configuration
@@ -223,6 +230,7 @@ DO & DON'T SUMMARY
                 "language": "en-US"
             },
             "recordingEnabled": True,
+            "server": self.get_server_config(),
             "serverMessages": ["end-of-call-report"],
             "silenceTimeoutSeconds": 30,
             "responseDelaySeconds": 0.4,
