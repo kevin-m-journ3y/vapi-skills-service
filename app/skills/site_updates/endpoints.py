@@ -521,11 +521,10 @@ async def get_site_progress_updates(
         if auth_response.status_code != 200:
             raise HTTPException(status_code=401, detail="Invalid API key")
 
-        auth_data = auth_response.json()
-        if not auth_data or not auth_data.get("tenant_id"):
+        # The RPC returns the tenant_id directly as a string, not wrapped in an object
+        tenant_id = auth_response.json()
+        if not tenant_id:
             raise HTTPException(status_code=401, detail="Authentication failed")
-
-        tenant_id = auth_data["tenant_id"]
 
     try:
         async with httpx.AsyncClient() as client:
