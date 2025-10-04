@@ -475,3 +475,134 @@ async def save_site_progress_update(request: dict):
                 }
             }]
         }
+
+
+@router.get("/api/v1/skills/site-updates/get-updates")
+async def get_site_progress_updates(
+    site_id: Optional[str] = None,
+    limit: int = 10,
+    authorization: str = None
+):
+    """
+    Get site progress updates for a tenant, optionally filtered by site
+
+    This endpoint retrieves structured daily progress reports with:
+    - Work progress, materials, issues, delays
+    - AI-extracted action items, blockers, concerns
+    - Safety flags and urgent issue indicators
+    """
+    from fastapi import HTTPException, Header
+    import os
+
+    # Authenticate using the authorization header (same as voice notes endpoint)
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+
+    api_key = authorization.replace("Bearer ", "")
+
+    # Authenticate with Supabase
+    supabase_url = os.getenv('SUPABASE_URL')
+    supabase_service_key = os.getenv('SUPABASE_SERVICE_KEY')
+
+    if not supabase_url or not supabase_service_key:
+        raise HTTPException(status_code=500, detail="Server configuration error")
+
+    async with httpx.AsyncClient() as auth_client:
+        auth_response = await auth_client.post(
+            f"{supabase_url}/rest/v1/rpc/authenticate_tenant_by_api_key",
+            headers={
+                "apikey": supabase_service_key,
+                "Authorization": f"Bearer {supabase_service_key}",
+                "Content-Type": "application/json"
+            },
+            json={"api_key_input": api_key}
+        )
+
+        if auth_response.status_code != 200:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        auth_data = auth_response.json()
+        if not auth_data or not auth_data.get("tenant_id"):
+            raise HTTPException(status_code=401, detail="Authentication failed")
+
+        tenant_id = auth_data["tenant_id"]
+
+    try:
+        async with httpx.AsyncClient() as client:
+            # Build query parameters
+            params = {
+                "tenant_id": f"eq.{tenant_id}",
+                "select": "id,site_id,update_date,main_focus,materials_delivered,work_progress,issues,delays,staffing,site_visitors,site_conditions,follow_up_actions,summary_brief,summary_detailed,extracted_action_items,identified_blockers,flagged_concerns,has_urgent_issues,has_safety_concerns,has_delays,is_wet_weather_closure,created_at,users(name),entities(name,identifier,address)",
+                "order": "update_date.desc,created_at.desc",
+                "limit": str(limit)
+            }
+
+            # Add site filter if specified
+            if site_id:
+                params["site_id"] = f"eq.{site_id}"
+
+            response = await client.get(
+                f"{settings.SUPABASE_URL}/rest/v1/site_progress_updates",
+                headers={
+                    "apikey": settings.SUPABASE_SERVICE_KEY,
+                    "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}"
+                },
+                params=params
+            )
+
+            if response.status_code == 200:
+                updates = response.json()
+
+                # Format the response
+                formatted_updates = []
+                for update in updates:
+                    formatted_update = {
+                        "id": update["id"],
+                        "update_date": update["update_date"],
+                        "created_at": update["created_at"],
+                        "main_focus": update.get("main_focus"),
+                        "materials_delivered": update.get("materials_delivered"),
+                        "work_progress": update.get("work_progress"),
+                        "issues": update.get("issues"),
+                        "delays": update.get("delays"),
+                        "staffing": update.get("staffing"),
+                        "site_visitors": update.get("site_visitors"),
+                        "site_conditions": update.get("site_conditions"),
+                        "follow_up_actions": update.get("follow_up_actions"),
+                        "summary_brief": update.get("summary_brief"),
+                        "summary_detailed": update.get("summary_detailed"),
+                        "action_items": update.get("extracted_action_items", []),
+                        "blockers": update.get("identified_blockers", []),
+                        "concerns": update.get("flagged_concerns", []),
+                        "has_urgent_issues": update.get("has_urgent_issues", False),
+                        "has_safety_concerns": update.get("has_safety_concerns", False),
+                        "has_delays": update.get("has_delays", False),
+                        "is_wet_weather_closure": update.get("is_wet_weather_closure", False),
+                        "user_name": update.get("users", {}).get("name") if update.get("users") else None
+                    }
+
+                    # Add site info
+                    if update.get("entities"):
+                        site_info = update["entities"]
+                        formatted_update["site"] = {
+                            "name": site_info.get("name"),
+                            "identifier": site_info.get("identifier"),
+                            "address": site_info.get("address")
+                        }
+
+                    formatted_updates.append(formatted_update)
+
+                return {
+                    "success": True,
+                    "updates": formatted_updates,
+                    "total": len(formatted_updates),
+                    "filters": {
+                        "site_id": site_id
+                    }
+                }
+            else:
+                return {"success": False, "error": f"Database error: {response.text}"}
+
+    except Exception as e:
+        logger.error(f"Error retrieving site updates: {str(e)}")
+        return {"success": False, "error": f"Query error: {str(e)}"}
