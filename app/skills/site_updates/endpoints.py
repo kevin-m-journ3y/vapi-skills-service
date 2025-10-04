@@ -4,7 +4,7 @@ Site Updates Skill - FastAPI Endpoints
 Webhook endpoints for site progress updates using VAPI format.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from typing import Dict, Optional
 import logging
 import json
@@ -481,7 +481,7 @@ async def save_site_progress_update(request: dict):
 async def get_site_progress_updates(
     site_id: Optional[str] = None,
     limit: int = 10,
-    authorization: str = None
+    authorization: str = Header(None)
 ):
     """
     Get site progress updates for a tenant, optionally filtered by site
@@ -491,7 +491,7 @@ async def get_site_progress_updates(
     - AI-extracted action items, blockers, concerns
     - Safety flags and urgent issue indicators
     """
-    from fastapi import HTTPException, Header
+    from fastapi import HTTPException
     import os
 
     # Authenticate using the authorization header (same as voice notes endpoint)
