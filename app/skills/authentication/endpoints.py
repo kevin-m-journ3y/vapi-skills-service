@@ -81,11 +81,25 @@ async def authenticate_by_phone(request: dict):
         if not vapi_call_id:
             vapi_call_id = args.get("vapi_call_id", "unknown")
 
-        # TEST MODE fallback - use environment variable when no phone provided
+        # Validate phone number is provided
         if not caller_phone or caller_phone.strip() == "":
-            test_phone = os.getenv("TEST_DEFAULT_PHONE", "+61412345678")
-            caller_phone = test_phone
-            logger.info(f"No phone in call metadata or args, using test default: {caller_phone}")
+            # In production, require a valid phone number
+            # For local testing, set TEST_DEFAULT_PHONE environment variable
+            test_phone = os.getenv("TEST_DEFAULT_PHONE")
+            if test_phone:
+                caller_phone = test_phone
+                logger.info(f"No phone in call metadata or args, using test default: {caller_phone}")
+            else:
+                logger.error("No phone number provided and TEST_DEFAULT_PHONE not set")
+                return {
+                    "results": [{
+                        "toolCallId": tool_call_id,
+                        "result": {
+                            "authorized": False,
+                            "message": "Phone number is required for authentication"
+                        }
+                    }]
+                }
 
         logger.info(f"Authenticating phone: {caller_phone}, call: {vapi_call_id}, toolCallId: {tool_call_id}")
 

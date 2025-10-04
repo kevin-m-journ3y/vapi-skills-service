@@ -316,7 +316,7 @@ async def identify_voice_note_context(request: dict):
                     result = {
                         "context_identified": True,
                         "note_type": "general",
-                        "message": f"I'll record a general note for {company_name}.",
+                        "message": f"Got it, I'll save this as a general note for {company_name}.",
                         "company_name": company_name,
                         "site_id": None
                     }
@@ -424,7 +424,7 @@ IMPORTANT: The site_id MUST be the exact UUID from the ID field, not a shortened
                                             "site_name": matching_site["name"],
                                             "site_identifier": matching_site.get("identifier"),
                                             "site_address": matching_site.get("address"),
-                                            "message": f"I'll record a note for {matching_site['name']} at {company_name}.",
+                                            "message": f"Perfect, I'll save this note for {matching_site['name']}.",
                                             "company_name": company_name
                                         }
                                     else:
@@ -440,7 +440,7 @@ IMPORTANT: The site_id MUST be the exact UUID from the ID field, not a shortened
                                     result = {
                                         "context_identified": True,
                                         "note_type": "general",
-                                        "message": f"I'll record a general note for {company_name}.",
+                                        "message": f"Got it, I'll save this as a general note for {company_name}.",
                                         "company_name": company_name,
                                         "site_id": None
                                     }
@@ -612,7 +612,7 @@ async def save_voice_note(request: dict):
                         "result": {
                             "success": True,
                             "note_id": note_id,
-                            "message": f"Perfect! I've saved your voice note{note_location}.",
+                            "message": f"All done! I've got that note saved{note_location} for you.",
                             "company_name": company_name,
                             "site_name": site_name,
                             "note_type": note_type

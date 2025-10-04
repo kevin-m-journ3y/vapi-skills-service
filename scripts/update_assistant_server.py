@@ -41,43 +41,50 @@ async def update_assistant_server():
         assistants = response.json()
         print(f"   Found {len(assistants)} assistants\n")
 
-        # Find Site Progress assistant
-        site_progress_assistant = None
-        for assistant in assistants:
-            if assistant.get('name') == 'JSMB-Jill-site-progress':
-                site_progress_assistant = assistant
-                break
+        # Find assistants that need server webhooks
+        assistants_to_update = [
+            'JSMB-Jill-site-progress',
+            'JSMB-Jill-voice-notes'
+        ]
 
-        if not site_progress_assistant:
-            print("❌ Could not find JSMB-Jill-site-progress assistant")
-            return
+        for assistant_name in assistants_to_update:
+            target_assistant = None
+            for assistant in assistants:
+                if assistant.get('name') == assistant_name:
+                    target_assistant = assistant
+                    break
 
-        assistant_id = site_progress_assistant['id']
-        print(f"✅ Found assistant: {assistant_id}\n")
+            if not target_assistant:
+                print(f"❌ Could not find {assistant_name} assistant")
+                continue
 
-        # Update with server configuration
-        print("🔄 Updating assistant with server webhook...")
+            assistant_id = target_assistant['id']
+            print(f"✅ Found {assistant_name}: {assistant_id}")
 
-        update_payload = {
-            "server": {
-                "url": server_url
-            },
-            "serverMessages": ["end-of-call-report"]
-        }
+            # Update with server configuration
+            print(f"🔄 Updating {assistant_name} with server webhook...")
 
-        update_response = await client.patch(
-            f"{base_url}/assistant/{assistant_id}",
-            headers=headers,
-            json=update_payload
-        )
+            update_payload = {
+                "server": {
+                    "url": server_url
+                },
+                "serverMessages": ["end-of-call-report"]
+            }
 
-        if update_response.status_code == 200:
-            print("✅ Assistant updated successfully!")
-            print(f"\n📞 The assistant will now send end-of-call reports to:")
-            print(f"   {server_url}")
-        else:
-            print(f"❌ Failed: {update_response.status_code}")
-            print(f"   {update_response.text}")
+            update_response = await client.patch(
+                f"{base_url}/assistant/{assistant_id}",
+                headers=headers,
+                json=update_payload
+            )
+
+            if update_response.status_code == 200:
+                print(f"✅ {assistant_name} updated successfully!\n")
+            else:
+                print(f"❌ Failed: {update_response.status_code}")
+                print(f"   {update_response.text}\n")
+
+        print(f"\n📞 Assistants will now send end-of-call reports to:")
+        print(f"   {server_url}")
 
 if __name__ == "__main__":
     asyncio.run(update_assistant_server())
