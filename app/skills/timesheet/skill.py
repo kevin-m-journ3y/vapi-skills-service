@@ -116,6 +116,26 @@ class TimesheetSkill(BaseSkill):
                     "url": f"{self.webhook_base_url}/api/v1/skills/timesheet/save-entry"
                 }
             },
+            "get_signon_data": {
+                "type": "function",
+                "function": {
+                    "name": "get_signon_data",
+                    "description": "Get today's QR sign-on data for the caller. Call this immediately after greeting to check if the user signed on at any sites today. Returns site names and arrival times.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "vapi_call_id": {
+                                "type": "string",
+                                "description": "The VAPI call identifier"
+                            }
+                        },
+                        "required": ["vapi_call_id"]
+                    }
+                },
+                "server": {
+                    "url": f"{self.webhook_base_url}/api/v1/skills/timesheet/get-signon-data"
+                }
+            },
             "confirm_and_save_all": {
                 "type": "function",
                 "function": {
@@ -138,6 +158,90 @@ class TimesheetSkill(BaseSkill):
                 },
                 "server": {
                     "url": f"{self.webhook_base_url}/api/v1/skills/timesheet/confirm-all"
+                }
+            },
+            "get_recent_timesheets": {
+                "type": "function",
+                "function": {
+                    "name": "get_recent_timesheets",
+                    "description": "Get the user's recent timesheet entries for the last N days. Use this when the user asks what they've already logged.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "days_back": {
+                                "type": "integer",
+                                "description": "Number of days to look back (default 14)"
+                            },
+                            "vapi_call_id": {
+                                "type": "string",
+                                "description": "The VAPI call identifier"
+                            }
+                        },
+                        "required": ["vapi_call_id"]
+                    }
+                },
+                "server": {
+                    "url": f"{self.webhook_base_url}/api/v1/skills/timesheet/get-recent-timesheets"
+                }
+            },
+            "check_date_for_conflicts": {
+                "type": "function",
+                "function": {
+                    "name": "check_date_for_conflicts",
+                    "description": "Check if the user already has timesheet entries for a specific date. Use this before logging time for historical dates to avoid duplicates.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "work_date": {
+                                "type": "string",
+                                "description": "The date to check in YYYY-MM-DD format"
+                            },
+                            "vapi_call_id": {
+                                "type": "string",
+                                "description": "The VAPI call identifier"
+                            }
+                        },
+                        "required": ["work_date", "vapi_call_id"]
+                    }
+                },
+                "server": {
+                    "url": f"{self.webhook_base_url}/api/v1/skills/timesheet/check-date-conflicts"
+                }
+            },
+            "update_timesheet_entry": {
+                "type": "function",
+                "function": {
+                    "name": "update_timesheet_entry",
+                    "description": "Update an existing timesheet entry. Use this when the user wants to modify a previously logged entry.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "timesheet_id": {
+                                "type": "string",
+                                "description": "The UUID of the timesheet entry to update"
+                            },
+                            "start_time": {
+                                "type": "string",
+                                "description": "New start time in 24-hour format HH:MM"
+                            },
+                            "end_time": {
+                                "type": "string",
+                                "description": "New end time in 24-hour format HH:MM"
+                            },
+                            "work_description": {
+                                "type": "string",
+                                "description": "New description of work done"
+                            },
+                            "plans_for_tomorrow": {
+                                "type": "string",
+                                "description": "Updated plans for tomorrow"
+                            }
+                        },
+                        "required": ["timesheet_id"]
+                    }
+                },
+                "server": {
+                    "url": f"{self.webhook_base_url}/api/v1/skills/timesheet/update-entry"
                 }
             }
         }

@@ -40,7 +40,7 @@ class TimesheetAssistant(BaseAssistant):
         The system prompt will use authentication context from message history.
         This first message should immediately start the timesheet conversation.
         """
-        return "Ok! Which site did you work at? Or say 'admin' if it was office work. And if you need to log for a different day, just let me know."
+        return "Ok! Let me check if you signed in anywhere today."
 
     def get_voice_config(self) -> Dict:
         """Jill's voice configuration using ElevenLabs - consistent across all assistants"""
@@ -66,6 +66,7 @@ class TimesheetAssistant(BaseAssistant):
         """Tools that Jill needs to function"""
         return [
             "authenticate_caller",                # From authentication skill
+            "get_signon_data",                    # From timesheet skill - QR sign-on awareness
             "identify_site_for_timesheet",        # From timesheet skill
             "save_timesheet_entry",               # From timesheet skill
             "confirm_and_save_all",               # From timesheet skill

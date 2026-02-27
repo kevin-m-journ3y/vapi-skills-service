@@ -56,7 +56,9 @@ async def get_session_context_by_call_id(vapi_call_id: str) -> Optional[Dict]:
                         "caller_phone": log_entry["caller_phone"],
                         "user_name": log_entry["raw_log_data"].get("user_name"),
                         "tenant_name": log_entry["raw_log_data"].get("tenant_name"),
-                        "available_sites": log_entry["raw_log_data"].get("available_sites", [])
+                        "available_sites": log_entry["raw_log_data"].get("available_sites", []),
+                        "current_date": log_entry["raw_log_data"].get("current_date"),
+                        "tenant_timezone": log_entry["raw_log_data"].get("tenant_timezone", "Australia/Sydney"),
                     }
 
             logger.warning(f"No session context found for call ID: {vapi_call_id}")
@@ -448,6 +450,59 @@ async def save_timesheet_entry(request: dict):
                 }
 
         logger.info(f"Timesheet entry saved successfully: {timesheet_entry['id']}")
+
+        # Auto-close matching active sign-on (fire-and-forget)
+        try:
+            async with httpx.AsyncClient() as client:
+                # Find active sign-on for this user + site + today
+                tenant_timezone = session_context.get("tenant_timezone", "Australia/Sydney")
+                tz = pytz.timezone(tenant_timezone)
+                today_start = datetime.strptime(work_date, '%Y-%m-%d').replace(
+                    hour=0, minute=0, second=0, tzinfo=tz
+                )
+                today_end = datetime.strptime(work_date, '%Y-%m-%d').replace(
+                    hour=23, minute=59, second=59, tzinfo=tz
+                )
+
+                signon_resp = await client.get(
+                    f"{settings.SUPABASE_URL}/rest/v1/site_signons",
+                    headers={
+                        "apikey": settings.SUPABASE_SERVICE_KEY,
+                        "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}"
+                    },
+                    params={
+                        "user_id": f"eq.{session_context['user_id']}",
+                        "site_id": f"eq.{site_id}",
+                        "status": "eq.active",
+                        "and": f"(signed_on_at.gte.{today_start.isoformat()},signed_on_at.lte.{today_end.isoformat()})",
+                        "select": "id",
+                        "limit": "1",
+                    }
+                )
+
+                if signon_resp.status_code == 200 and signon_resp.json():
+                    signon_id = signon_resp.json()[0]["id"]
+                    close_resp = await client.patch(
+                        f"{settings.SUPABASE_URL}/rest/v1/site_signons",
+                        headers={
+                            "apikey": settings.SUPABASE_SERVICE_KEY,
+                            "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
+                            "Content-Type": "application/json",
+                        },
+                        params={"id": f"eq.{signon_id}"},
+                        json={
+                            "status": "signed_off",
+                            "signed_off_at": datetime.now(tz).isoformat(),
+                            "signoff_method": "jill_timesheet",
+                            "timesheet_id": timesheet_entry["id"],
+                        }
+                    )
+                    if close_resp.status_code in (200, 204):
+                        logger.info(f"Auto-closed sign-on {signon_id} via timesheet save")
+                    else:
+                        logger.warning(f"Failed to close sign-on {signon_id}: {close_resp.status_code}")
+        except Exception as signon_err:
+            logger.warning(f"Non-fatal: failed to auto-close sign-on: {signon_err}")
 
         return {
             "results": [{
@@ -1019,6 +1074,168 @@ async def update_timesheet_entry(request: dict):
                     "success": False,
                     "error": str(e),
                     "message": "I had trouble updating that entry."
+                }
+            }]
+        }
+
+
+@router.post("/api/v1/skills/timesheet/get-signon-data")
+async def get_signon_data(request: dict):
+    """
+    Get today's QR sign-on data for the authenticated caller.
+
+    Called by Jill immediately after greeting to check if the user
+    signed on at any sites today via QR code. If so, Jill can skip
+    site identification and pre-fill start times.
+    """
+    try:
+        tool_call_id, args = extract_vapi_args(request)
+
+        vapi_call_id = None
+        if "message" in request and "call" in request["message"]:
+            vapi_call_id = request["message"]["call"]["id"]
+
+        if not vapi_call_id:
+            vapi_call_id = tool_call_id
+
+        logger.info(f"Getting sign-on data. Call: {vapi_call_id}")
+
+        session_context = await get_session_context_by_call_id(vapi_call_id)
+
+        if not session_context:
+            return {
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": {
+                        "has_signons": False,
+                        "message": "Session not found."
+                    }
+                }]
+            }
+
+        user_id = session_context["user_id"]
+        tenant_id = session_context["tenant_id"]
+        tenant_timezone = session_context.get("tenant_timezone", "Australia/Sydney")
+        current_date = session_context.get("current_date")
+
+        # Calculate today's date in tenant timezone if not in session
+        if not current_date:
+            tz = pytz.timezone(tenant_timezone)
+            current_date = datetime.now(tz).strftime('%Y-%m-%d')
+
+        # Query site_signons for today (active or signed_off, not expired)
+        tz = pytz.timezone(tenant_timezone)
+        today_start = datetime.strptime(current_date, '%Y-%m-%d').replace(
+            hour=0, minute=0, second=0, tzinfo=tz
+        )
+        today_end = datetime.strptime(current_date, '%Y-%m-%d').replace(
+            hour=23, minute=59, second=59, tzinfo=tz
+        )
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{settings.SUPABASE_URL}/rest/v1/site_signons",
+                headers={
+                    "apikey": settings.SUPABASE_SERVICE_KEY,
+                    "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}"
+                },
+                params={
+                    "user_id": f"eq.{user_id}",
+                    "tenant_id": f"eq.{tenant_id}",
+                    "status": "in.(active,signed_off)",
+                    "and": f"(signed_on_at.gte.{today_start.isoformat()},signed_on_at.lte.{today_end.isoformat()})",
+                    "select": "id,site_id,signed_on_at,signed_off_at,status",
+                    "order": "signed_on_at.asc",
+                }
+            )
+
+            if resp.status_code != 200:
+                logger.error(f"Failed to query site_signons: {resp.status_code} - {resp.text}")
+                return {
+                    "results": [{
+                        "toolCallId": tool_call_id,
+                        "result": {
+                            "has_signons": False,
+                            "signon_count": 0,
+                            "signons": [],
+                            "message": "No sign-on data available."
+                        }
+                    }]
+                }
+
+            signons = resp.json()
+
+            if not signons:
+                return {
+                    "results": [{
+                        "toolCallId": tool_call_id,
+                        "result": {
+                            "has_signons": False,
+                            "signon_count": 0,
+                            "signons": [],
+                            "message": "No sign-on data for today."
+                        }
+                    }]
+                }
+
+            # Enrich with site names
+            site_ids = list(set(s["site_id"] for s in signons))
+            sites_resp = await client.get(
+                f"{settings.SUPABASE_URL}/rest/v1/entities",
+                headers={
+                    "apikey": settings.SUPABASE_SERVICE_KEY,
+                    "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}"
+                },
+                params={
+                    "id": f"in.({','.join(site_ids)})",
+                    "select": "id,name",
+                }
+            )
+            site_map = {}
+            if sites_resp.status_code == 200:
+                site_map = {s["id"]: s["name"] for s in sites_resp.json()}
+
+            # Format sign-on times in tenant timezone for natural speech
+            signon_list = []
+            for s in signons:
+                signed_on_dt = datetime.fromisoformat(s["signed_on_at"].replace("Z", "+00:00"))
+                signed_on_local = signed_on_dt.astimezone(tz)
+                time_str = signed_on_local.strftime("%-I:%M %p").lower()  # e.g. "7:30 am"
+
+                signon_list.append({
+                    "signon_id": s["id"],
+                    "site_id": s["site_id"],
+                    "site_name": site_map.get(s["site_id"], "Unknown site"),
+                    "signed_on_at": s["signed_on_at"],
+                    "signed_on_time": time_str,
+                    "status": s["status"],
+                })
+
+            logger.info(f"Found {len(signon_list)} sign-ons for user {user_id} today")
+
+            return {
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": {
+                        "has_signons": True,
+                        "signon_count": len(signon_list),
+                        "signons": signon_list,
+                        "message": f"Found {len(signon_list)} sign-on(s) for today."
+                    }
+                }]
+            }
+
+    except Exception as e:
+        logger.error(f"Error in get_signon_data: {str(e)}", exc_info=True)
+        return {
+            "results": [{
+                "toolCallId": tool_call_id,
+                "result": {
+                    "has_signons": False,
+                    "signon_count": 0,
+                    "signons": [],
+                    "error": str(e),
+                    "message": "Could not check sign-on data. Continuing normally."
                 }
             }]
         }
