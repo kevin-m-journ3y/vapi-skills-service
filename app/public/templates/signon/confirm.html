@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Site Sign-On - {{ site_name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Manrope', sans-serif; }
+        [x-cloak] { display: none !important; }
+    </style>
+</head>
+<body class="bg-base-200 min-h-screen flex items-center justify-center p-4" data-theme="light">
+    <div class="card bg-base-100 shadow-xl w-full max-w-md" x-data="confirmApp()" x-cloak>
+        <div class="card-body items-center text-center">
+            <!-- Header -->
+            <div class="mb-2">
+                <span style="font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 1.5rem; letter-spacing: -0.02em;">JOURN<span style="color: #E91E8C;">3</span>Y</span>
+            </div>
+
+            <!-- Confirm step -->
+            <div x-show="step === 'confirm'">
+                <div class="bg-primary/5 rounded-xl p-6 mb-4">
+                    <p class="text-lg text-base-content/70">Welcome back,</p>
+                    <p class="text-3xl font-bold">{{ user_name }}</p>
+                </div>
+
+                <h2 class="text-xl mb-1">Sign on to</h2>
+                <div class="badge badge-lg badge-primary gap-2 mb-1">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                    {{ site_name }}
+                </div>
+                {% if site_address %}
+                <p class="text-sm text-base-content/60 mb-4">{{ site_address }}</p>
+                {% endif %}
+
+                <button
+                    class="btn btn-success btn-lg w-full text-xl mt-4"
+                    @click="doSignon()"
+                    :disabled="loading"
+                    style="min-height: 4rem;"
+                >
+                    <span x-show="!loading">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-7 w-7 inline mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+                        Yes, Sign Me On
+                    </span>
+                    <span x-show="loading" class="loading loading-spinner loading-lg"></span>
+                </button>
+
+                <a href="/s/{{ short_code }}" class="btn btn-ghost btn-sm mt-3">
+                    Not {{ user_name }}? Use a different number
+                </a>
+            </div>
+
+            <!-- Success step -->
+            <div x-show="step === 'success'" x-cloak>
+                <div class="bg-success/10 rounded-xl p-6 mb-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto text-success mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    <p class="text-xl font-bold text-success">Signed On!</p>
+                    <p class="text-lg font-semibold mt-1">{{ site_name }}</p>
+                    <p class="text-base-content/70 mt-1" x-text="currentTime"></p>
+                </div>
+
+                <div x-show="postMessage" class="alert alert-info mt-3" x-cloak>
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    <span x-text="postMessage"></span>
+                </div>
+
+                <div x-show="jillPhone" class="mt-4 text-sm text-base-content/60" x-cloak>
+                    <p>Remember to call Jill at the end of the day:</p>
+                    <a :href="'tel:' + jillPhone" class="btn btn-outline btn-sm mt-1" x-text="jillPhone"></a>
+                </div>
+            </div>
+
+            <!-- Error -->
+            <div x-show="step === 'error'" x-cloak>
+                <div class="alert alert-error">
+                    <span x-text="error"></span>
+                </div>
+                <a href="/s/{{ short_code }}" class="btn btn-primary mt-4">Try Again</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function confirmApp() {
+            return {
+                step: 'confirm',
+                loading: false,
+                error: '',
+                postMessage: '',
+                jillPhone: '',
+                currentTime: '',
+
+                async doSignon() {
+                    this.loading = true;
+                    try {
+                        const resp = await fetch('/s/{{ short_code }}/signon', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ user_id: '{{ user_id }}' })
+                        });
+
+                        const data = await resp.json();
+
+                        if (data.success) {
+                            this.postMessage = data.post_signon_message || '';
+                            this.jillPhone = data.jill_phone_number || '';
+                            this.currentTime = new Date().toLocaleTimeString('en-AU', {
+                                hour: '2-digit', minute: '2-digit', hour12: true
+                            });
+                            this.step = 'success';
+                        } else {
+                            this.error = data.error || 'Sign-on failed';
+                            this.step = 'error';
+                        }
+                    } catch (err) {
+                        this.error = 'Connection error. Please try again.';
+                        this.step = 'error';
+                    } finally {
+                        this.loading = false;
+                    }
+                }
+            };
+        }
+    </script>
+</body>
+</html>

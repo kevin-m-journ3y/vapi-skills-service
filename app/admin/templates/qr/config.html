@@ -1,0 +1,282 @@
+{% extends "layouts/base.html" %}
+{% block title %}QR Sign-On Config{% endblock %}
+{% block content %}
+<div x-data="qrConfig()" x-init="init()">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-2xl font-bold">QR Sign-On Configuration</h1>
+            <p class="text-base-content/60">Configure QR sign-on settings and generate QR codes for sites</p>
+        </div>
+    </div>
+
+    <!-- Tenant Switcher (super admin) -->
+    <template x-if="currentUser?.role === 'super_admin'">
+        <div class="mb-6">
+            <select class="select select-bordered w-full max-w-xs" x-model="selectedTenantId" @change="loadConfig()">
+                <option value="">Select Tenant</option>
+                <template x-for="t in tenants" :key="t.id">
+                    <option :value="t.id" x-text="t.name"></option>
+                </template>
+            </select>
+        </div>
+    </template>
+
+    <!-- Config Card -->
+    <div x-show="selectedTenantId" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Settings -->
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title">Settings</h2>
+
+                <div class="form-control">
+                    <label class="label cursor-pointer">
+                        <span class="label-text text-lg font-semibold">Enable QR Sign-On</span>
+                        <input type="checkbox" class="toggle toggle-primary toggle-lg" x-model="config.is_enabled" />
+                    </label>
+                </div>
+
+                <div class="divider">Reminder SMS</div>
+
+                <div class="form-control">
+                    <label class="label cursor-pointer">
+                        <span class="label-text">Enable SMS Reminders</span>
+                        <input type="checkbox" class="toggle toggle-success" x-model="config.reminder_enabled" />
+                    </label>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="form-control">
+                        <label class="label"><span class="label-text">First Reminder</span></label>
+                        <input type="time" class="input input-bordered" x-model="config.first_reminder_time" />
+                    </div>
+                    <div class="form-control">
+                        <label class="label"><span class="label-text">Second Reminder</span></label>
+                        <input type="time" class="input input-bordered" x-model="config.second_reminder_time" />
+                    </div>
+                </div>
+
+                <div class="divider">Contact Numbers</div>
+
+                <div class="form-control">
+                    <label class="label"><span class="label-text">Jill Phone Number (shown in SMS)</span></label>
+                    <input type="tel" class="input input-bordered" placeholder="+61 468 086 094" x-model="config.jill_phone_number" />
+                </div>
+
+                <div class="form-control">
+                    <label class="label"><span class="label-text">Manager Phone (shown to unregistered users)</span></label>
+                    <input type="tel" class="input input-bordered" placeholder="+61 400 000 000" x-model="config.manager_phone_number" />
+                </div>
+
+                <div class="divider">Post Sign-On Message</div>
+
+                <div class="form-control">
+                    <label class="label"><span class="label-text">Message shown after sign-on</span></label>
+                    <textarea class="textarea textarea-bordered h-24" placeholder="Remember to complete your health and safety sign-in form." x-model="config.post_signon_message"></textarea>
+                </div>
+
+                <div class="card-actions justify-end mt-4">
+                    <button class="btn btn-primary" @click="saveConfig()" :disabled="saving">
+                        <span x-show="!saving">Save Configuration</span>
+                        <span x-show="saving" class="loading loading-spinner loading-sm"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- QR Codes for Sites -->
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title">Site QR Codes</h2>
+                <p class="text-sm text-base-content/60">Generate and download QR codes for each construction site</p>
+
+                <div x-show="loadingSites" class="flex justify-center py-8">
+                    <span class="loading loading-spinner loading-lg"></span>
+                </div>
+
+                <div x-show="!loadingSites" class="space-y-3 mt-4">
+                    <template x-for="site in sites" :key="site.id">
+                        <div class="flex items-center justify-between p-3 rounded-lg border" :class="site.has_qr ? 'border-success/30 bg-success/5' : 'border-base-300'">
+                            <div>
+                                <div class="font-medium" x-text="site.name"></div>
+                                <div class="text-sm text-base-content/50" x-text="site.address || 'No address'"></div>
+                                <div x-show="site.has_qr" class="text-xs text-success mt-1">
+                                    QR Active - <span class="font-mono" x-text="site.qr_url"></span>
+                                </div>
+                            </div>
+                            <div class="flex gap-2">
+                                <template x-if="!site.has_qr">
+                                    <button class="btn btn-sm btn-primary" @click="generateQR(site)" :disabled="site.generating">
+                                        <span x-show="!site.generating">Generate QR</span>
+                                        <span x-show="site.generating" class="loading loading-spinner loading-xs"></span>
+                                    </button>
+                                </template>
+                                <template x-if="site.has_qr">
+                                    <div class="flex gap-1">
+                                        <a :href="'/admin/sites/' + site.id + '/qr/pdf'" class="btn btn-sm btn-success" target="_blank" title="Download PDF">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                                            PDF
+                                        </a>
+                                        <a :href="'/admin/sites/' + site.id + '/qr/image'" class="btn btn-sm btn-outline" target="_blank" title="View QR Image">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                                        </a>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+
+                    <div x-show="sites.length === 0" class="text-center py-8 text-base-content/50">
+                        No sites found for this tenant
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div x-show="!selectedTenantId && currentUser?.role === 'super_admin'" class="text-center py-12 text-base-content/50">
+        Select a tenant to configure QR sign-on
+    </div>
+
+    <!-- Toast -->
+    <div x-show="toast.show" x-transition class="toast toast-top toast-end z-50" x-cloak>
+        <div class="alert" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'">
+            <span x-text="toast.message"></span>
+        </div>
+    </div>
+</div>
+
+<script>
+function qrConfig() {
+    return {
+        currentUser: null,
+        selectedTenantId: '',
+        tenants: [],
+        config: {
+            is_enabled: false,
+            reminder_enabled: true,
+            first_reminder_time: '17:30',
+            second_reminder_time: '19:00',
+            jill_phone_number: '',
+            manager_phone_number: '',
+            post_signon_message: 'Remember to complete your health and safety sign-in form.',
+        },
+        sites: [],
+        loadingSites: false,
+        saving: false,
+        toast: { show: false, message: '', type: 'success' },
+
+        async init() {
+            const resp = await fetch('/admin/auth/me', { credentials: 'same-origin' });
+            if (!resp.ok) { window.location.href = '/admin/login'; return; }
+            const data = await resp.json();
+            this.currentUser = data.user;
+
+            if (this.currentUser.role === 'super_admin') {
+                await this.loadTenants();
+            } else {
+                this.selectedTenantId = this.currentUser.tenant_id;
+                await this.loadConfig();
+            }
+        },
+
+        async loadTenants() {
+            const resp = await fetch('/admin/tenants/data', { credentials: 'same-origin' });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.success) this.tenants = data.tenants || [];
+            }
+        },
+
+        async loadConfig() {
+            if (!this.selectedTenantId) return;
+
+            const resp = await fetch(`/admin/qr-signons/config/data?tenant_id=${this.selectedTenantId}`, { credentials: 'same-origin' });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.success && data.config) {
+                    this.config = { ...this.config, ...data.config };
+                } else {
+                    // Reset to defaults for new tenant
+                    this.config = {
+                        is_enabled: false,
+                        reminder_enabled: true,
+                        first_reminder_time: '17:30',
+                        second_reminder_time: '19:00',
+                        jill_phone_number: '',
+                        manager_phone_number: '',
+                        post_signon_message: 'Remember to complete your health and safety sign-in form.',
+                    };
+                }
+            }
+
+            await this.loadSites();
+        },
+
+        async loadSites() {
+            this.loadingSites = true;
+            try {
+                const resp = await fetch(`/admin/qr-signons/sites?tenant_id=${this.selectedTenantId}`, { credentials: 'same-origin' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.success) this.sites = data.sites.map(s => ({ ...s, generating: false }));
+                }
+            } finally {
+                this.loadingSites = false;
+            }
+        },
+
+        async saveConfig() {
+            this.saving = true;
+            try {
+                const resp = await fetch('/admin/qr-signons/config/update', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ...this.config, tenant_id: this.selectedTenantId })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.showToast('Configuration saved', 'success');
+                } else {
+                    this.showToast(data.error || 'Failed to save', 'error');
+                }
+            } catch (err) {
+                this.showToast('Failed to save', 'error');
+            } finally {
+                this.saving = false;
+            }
+        },
+
+        async generateQR(site) {
+            site.generating = true;
+            try {
+                const resp = await fetch(`/admin/sites/${site.id}/qr/generate`, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    site.has_qr = true;
+                    site.qr_short_code = data.short_code;
+                    site.qr_url = data.url;
+                    site.qr_active = true;
+                    this.showToast('QR code generated for ' + site.name, 'success');
+                } else {
+                    this.showToast(data.error || 'Failed to generate', 'error');
+                }
+            } catch (err) {
+                this.showToast('Failed to generate QR', 'error');
+            } finally {
+                site.generating = false;
+            }
+        },
+
+        showToast(message, type = 'success') {
+            this.toast = { show: true, message, type };
+            setTimeout(() => { this.toast.show = false; }, 3000);
+        }
+    };
+}
+</script>
+{% endblock %}

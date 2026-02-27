@@ -34,6 +34,9 @@ logs/
 .coverage
 htmlcov/
 
+# VAPI Evals results (generated during test runs)
+scripts/vapi_evals/results/
+
 # Railway
 .railway/
 

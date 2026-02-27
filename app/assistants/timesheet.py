@@ -34,8 +34,13 @@ class TimesheetAssistant(BaseAssistant):
         return TIMESHEET_SYSTEM_PROMPT_V2
 
     def get_first_message(self) -> str:
-        """The greeting message Jill speaks first"""
-        return "Perfect! Ready to log today's timesheet or catch up on any missed days? I can list your sites if that helps."
+        """The greeting message Jill speaks first
+
+        Note: This is transferred from greeter, so user is already authenticated.
+        The system prompt will use authentication context from message history.
+        This first message should immediately start the timesheet conversation.
+        """
+        return "Ok! Which site did you work at? Or say 'admin' if it was office work. And if you need to log for a different day, just let me know."
 
     def get_voice_config(self) -> Dict:
         """Jill's voice configuration using ElevenLabs - consistent across all assistants"""

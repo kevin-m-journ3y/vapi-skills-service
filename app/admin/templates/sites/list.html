@@ -1,0 +1,355 @@
+{% extends "layouts/base.html" %}
+{% block title %}Sites{% endblock %}
+{% block content %}
+<div x-data="siteManagement()" x-init="init()">
+
+    <!-- Header -->
+    <div class="mb-8 flex justify-between items-center">
+        <div>
+            <h1 class="text-4xl font-bold">Sites</h1>
+            <p class="text-base-content/70 mt-2">Manage construction sites and QR sign-on codes</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <!-- Tenant Switcher (Super Admin Only) -->
+            <template x-if="currentUser?.role === 'super_admin'">
+                <div class="form-control">
+                    <select class="select select-bordered w-64" x-model="selectedTenantId" @change="onTenantChange()">
+                        <option value="">Select a Company</option>
+                        <template x-for="tenant in tenants" :key="tenant.id">
+                            <option :value="tenant.id" x-text="tenant.name"></option>
+                        </template>
+                    </select>
+                </div>
+            </template>
+
+            <button class="btn btn-primary" @click="openAddModal()" :disabled="!selectedTenantId">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+                Add Site
+            </button>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div x-show="toast.show" x-transition class="toast toast-top toast-end z-50" x-cloak>
+        <div class="alert" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'">
+            <span x-text="toast.message"></span>
+        </div>
+    </div>
+
+    <!-- Loading -->
+    <div x-show="loading" class="flex justify-center items-center min-h-[400px]">
+        <span class="loading loading-spinner loading-lg"></span>
+    </div>
+
+    <!-- No Tenant Selected (Super Admin) -->
+    <div x-show="!loading && !selectedTenantId && currentUser?.role === 'super_admin'" x-cloak class="text-center py-12 text-base-content/50">
+        Select a company to manage sites
+    </div>
+
+    <!-- Sites Table -->
+    <div x-show="!loading && selectedTenantId && sites.length > 0" x-cloak class="card bg-base-100 shadow-lg">
+        <div class="card-body p-0">
+            <div class="overflow-x-auto">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Site Name</th>
+                            <th>Address</th>
+                            <th class="text-center">QR Code</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="(site, idx) in sites" :key="site.id">
+                            <tr>
+                                <td>
+                                    <div class="font-bold" x-text="site.name"></div>
+                                    <template x-if="site.metadata?.is_overhead">
+                                        <span class="badge badge-xs badge-ghost">Overheads</span>
+                                    </template>
+                                </td>
+                                <td>
+                                    <span class="text-sm text-base-content/60" x-text="site.address || '-'"></span>
+                                </td>
+                                <td class="text-center">
+                                    <template x-if="site.has_qr">
+                                        <div class="flex items-center justify-center gap-1">
+                                            <span class="badge badge-success badge-sm gap-1">
+                                                <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+                                                Active
+                                            </span>
+                                            <a :href="'/admin/sites/' + site.id + '/qr/pdf'" class="btn btn-xs btn-ghost" target="_blank" title="Download PDF">
+                                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                                            </a>
+                                            <a :href="'/admin/sites/' + site.id + '/qr/image'" class="btn btn-xs btn-ghost" target="_blank" title="View QR Image">
+                                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                                            </a>
+                                        </div>
+                                    </template>
+                                    <template x-if="!site.has_qr">
+                                        <button class="btn btn-xs btn-outline btn-primary" @click="generateQR(site)" :disabled="site.generating">
+                                            <span x-show="!site.generating">Generate QR</span>
+                                            <span x-show="site.generating" class="loading loading-spinner loading-xs"></span>
+                                        </button>
+                                    </template>
+                                </td>
+                                <td>
+                                    <div class="flex gap-1">
+                                        <button class="btn btn-sm btn-ghost" @click="openEditModal(idx)" title="Edit">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                        </button>
+                                        <button class="btn btn-sm btn-ghost text-error" @click="confirmDelete(site)" title="Delete" x-show="!site.metadata?.is_overhead">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Empty State -->
+    <div x-show="!loading && selectedTenantId && sites.length === 0" x-cloak class="card bg-base-100 shadow-lg">
+        <div class="card-body items-center text-center py-12">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-24 w-24 text-base-content/30 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            <h3 class="text-xl font-bold">No Sites Yet</h3>
+            <p class="text-base-content/70 mt-2">Add your first construction site to get started.</p>
+            <button class="btn btn-primary mt-4" @click="openAddModal()">Add Site</button>
+        </div>
+    </div>
+
+    <!-- Add/Edit Site Modal -->
+    <dialog x-ref="siteModal" class="modal">
+        <div class="modal-box">
+            <h3 class="font-bold text-lg" x-text="editForm.isNew ? 'Add New Site' : 'Edit Site'"></h3>
+            <form @submit.prevent="saveSite" class="py-4">
+                <div class="form-control w-full mb-4">
+                    <label class="label"><span class="label-text">Site Name *</span></label>
+                    <input type="text" x-model="editForm.name" class="input input-bordered w-full" placeholder="e.g. 156 Potts Street" required />
+                </div>
+                <div class="form-control w-full mb-4">
+                    <label class="label"><span class="label-text">Address</span></label>
+                    <input type="text" x-model="editForm.address" class="input input-bordered w-full" placeholder="e.g. 156 Potts Street, Toowoomba QLD" />
+                </div>
+                <div class="modal-action">
+                    <button type="button" class="btn btn-ghost" @click="$refs.siteModal.close()" :disabled="editForm.saving">Cancel</button>
+                    <button type="submit" class="btn btn-primary" :disabled="editForm.saving">
+                        <span x-show="!editForm.saving" x-text="editForm.isNew ? 'Create Site' : 'Save Changes'"></span>
+                        <span x-show="editForm.saving" class="loading loading-spinner loading-sm"></span>
+                    </button>
+                </div>
+            </form>
+        </div>
+        <form method="dialog" class="modal-backdrop"><button>close</button></form>
+    </dialog>
+
+    <!-- Delete Confirmation Modal -->
+    <dialog x-ref="deleteModal" class="modal">
+        <div class="modal-box">
+            <h3 class="font-bold text-lg text-error">Delete Site</h3>
+            <p class="py-4">Are you sure you want to delete <strong x-text="deleteTarget?.name"></strong>? This cannot be undone.</p>
+            <div class="modal-action">
+                <button class="btn btn-ghost" @click="$refs.deleteModal.close()">Cancel</button>
+                <button class="btn btn-error" @click="deleteSite()" :disabled="deleting">
+                    <span x-show="!deleting">Delete</span>
+                    <span x-show="deleting" class="loading loading-spinner loading-sm"></span>
+                </button>
+            </div>
+        </div>
+        <form method="dialog" class="modal-backdrop"><button>close</button></form>
+    </dialog>
+</div>
+
+<script>
+function siteManagement() {
+    return {
+        currentUser: null,
+        selectedTenantId: '',
+        tenants: [],
+        sites: [],
+        loading: false,
+        toast: { show: false, message: '', type: 'success' },
+        editForm: { isNew: true, siteId: null, siteIndex: null, name: '', address: '', saving: false },
+        deleteTarget: null,
+        deleting: false,
+
+        async init() {
+            const resp = await fetch('/admin/auth/me', { credentials: 'same-origin' });
+            if (!resp.ok) { window.location.href = '/admin/login'; return; }
+            const data = await resp.json();
+            this.currentUser = data.user;
+
+            if (this.currentUser.role === 'super_admin') {
+                await this.loadTenants();
+                const saved = localStorage.getItem('selected_tenant_id');
+                if (saved) {
+                    this.selectedTenantId = saved;
+                    await this.loadSites();
+                }
+            } else {
+                this.selectedTenantId = this.currentUser.tenant_id;
+                await this.loadSites();
+            }
+        },
+
+        async loadTenants() {
+            const resp = await fetch('/admin/tenants/data', { credentials: 'same-origin' });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.success) this.tenants = data.tenants || [];
+            }
+        },
+
+        onTenantChange() {
+            if (this.selectedTenantId) {
+                localStorage.setItem('selected_tenant_id', this.selectedTenantId);
+            } else {
+                localStorage.removeItem('selected_tenant_id');
+            }
+            this.loadSites();
+        },
+
+        async loadSites() {
+            if (!this.selectedTenantId) { this.sites = []; return; }
+            this.loading = true;
+            try {
+                const resp = await fetch(`/admin/qr-signons/sites?tenant_id=${this.selectedTenantId}`, { credentials: 'same-origin' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.success) this.sites = data.sites.map(s => ({ ...s, generating: false }));
+                }
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        openAddModal() {
+            this.editForm = { isNew: true, siteId: null, siteIndex: null, name: '', address: '', saving: false };
+            this.$refs.siteModal.showModal();
+        },
+
+        openEditModal(idx) {
+            const site = this.sites[idx];
+            this.editForm = {
+                isNew: false,
+                siteId: site.id,
+                siteIndex: idx,
+                name: site.name,
+                address: site.address || '',
+                saving: false
+            };
+            this.$refs.siteModal.showModal();
+        },
+
+        async saveSite() {
+            this.editForm.saving = true;
+            try {
+                if (this.editForm.isNew) {
+                    const resp = await fetch('/admin/sites', {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            name: this.editForm.name,
+                            address: this.editForm.address,
+                            tenant_id: this.selectedTenantId
+                        })
+                    });
+                    const data = await resp.json();
+                    if (data.success) {
+                        this.sites.push({ ...data.site, has_qr: false, qr_short_code: null, qr_active: false, qr_url: null, generating: false });
+                        this.$refs.siteModal.close();
+                        this.showToast('Site created');
+                    } else {
+                        this.showToast(data.error || 'Failed to create site', 'error');
+                    }
+                } else {
+                    const resp = await fetch(`/admin/sites/${this.editForm.siteId}`, {
+                        method: 'PUT',
+                        credentials: 'same-origin',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: this.editForm.name, address: this.editForm.address })
+                    });
+                    const data = await resp.json();
+                    if (data.success) {
+                        this.sites[this.editForm.siteIndex].name = this.editForm.name;
+                        this.sites[this.editForm.siteIndex].address = this.editForm.address;
+                        this.$refs.siteModal.close();
+                        this.showToast('Site updated');
+                    } else {
+                        this.showToast(data.error || 'Failed to update site', 'error');
+                    }
+                }
+            } catch (err) {
+                this.showToast('Connection error', 'error');
+            } finally {
+                this.editForm.saving = false;
+            }
+        },
+
+        confirmDelete(site) {
+            this.deleteTarget = site;
+            this.$refs.deleteModal.showModal();
+        },
+
+        async deleteSite() {
+            if (!this.deleteTarget) return;
+            this.deleting = true;
+            try {
+                const resp = await fetch(`/admin/sites/${this.deleteTarget.id}`, {
+                    method: 'DELETE',
+                    credentials: 'same-origin',
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.sites = this.sites.filter(s => s.id !== this.deleteTarget.id);
+                    this.$refs.deleteModal.close();
+                    this.showToast('Site deleted');
+                } else {
+                    this.showToast(data.error || 'Failed to delete site', 'error');
+                }
+            } catch (err) {
+                this.showToast('Connection error', 'error');
+            } finally {
+                this.deleting = false;
+            }
+        },
+
+        async generateQR(site) {
+            site.generating = true;
+            try {
+                const resp = await fetch(`/admin/sites/${site.id}/qr/generate`, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    site.has_qr = true;
+                    site.qr_short_code = data.short_code;
+                    site.qr_url = data.url;
+                    site.qr_active = true;
+                    this.showToast('QR code generated for ' + site.name);
+                } else {
+                    this.showToast(data.error || 'Failed to generate', 'error');
+                }
+            } catch (err) {
+                this.showToast('Failed to generate QR', 'error');
+            } finally {
+                site.generating = false;
+            }
+        },
+
+        showToast(message, type = 'success') {
+            this.toast = { show: true, message, type };
+            setTimeout(() => { this.toast.show = false; }, 3000);
+        }
+    };
+}
+</script>
+{% endblock %}

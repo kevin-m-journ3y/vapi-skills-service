@@ -1,0 +1,185 @@
+{% extends "layouts/base.html" %}
+{% block title %}QR Sign-On Enrollment{% endblock %}
+{% block content %}
+<div x-data="enrollment()" x-init="init()">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-2xl font-bold">QR Sign-On Enrollment</h1>
+            <p class="text-base-content/60">Manage which users receive SMS reminders when they haven't signed off</p>
+        </div>
+        <div x-show="users.length > 0" class="flex gap-2">
+            <button class="btn btn-sm btn-outline" @click="enrollAll(true)">Enroll All</button>
+            <button class="btn btn-sm btn-outline" @click="enrollAll(false)">Unenroll All</button>
+        </div>
+    </div>
+
+    <!-- Tenant Switcher -->
+    <template x-if="currentUser?.role === 'super_admin'">
+        <div class="mb-6">
+            <select class="select select-bordered w-full max-w-xs" x-model="selectedTenantId" @change="loadUsers()">
+                <option value="">Select Tenant</option>
+                <template x-for="t in tenants" :key="t.id">
+                    <option :value="t.id" x-text="t.name"></option>
+                </template>
+            </select>
+        </div>
+    </template>
+
+    <!-- Stats -->
+    <div class="stats shadow mb-6" x-show="selectedTenantId">
+        <div class="stat">
+            <div class="stat-title">Total Users</div>
+            <div class="stat-value text-primary" x-text="users.length"></div>
+        </div>
+        <div class="stat">
+            <div class="stat-title">Enrolled</div>
+            <div class="stat-value text-success" x-text="users.filter(u => u.qr_signon_enrolled).length"></div>
+        </div>
+        <div class="stat">
+            <div class="stat-title">Not Enrolled</div>
+            <div class="stat-value text-base-content/40" x-text="users.filter(u => !u.qr_signon_enrolled).length"></div>
+        </div>
+    </div>
+
+    <!-- Users List -->
+    <div class="card bg-base-100 shadow-xl" x-show="selectedTenantId">
+        <div class="card-body p-0">
+            <div x-show="loading" class="flex justify-center py-12">
+                <span class="loading loading-spinner loading-lg"></span>
+            </div>
+
+            <div x-show="!loading" class="overflow-x-auto">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Phone</th>
+                            <th>Role</th>
+                            <th class="text-center">SMS Enrolled</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="user in users" :key="user.id">
+                            <tr>
+                                <td>
+                                    <div class="font-medium" x-text="user.name"></div>
+                                </td>
+                                <td>
+                                    <span class="text-sm font-mono" x-text="user.phone_number"></span>
+                                </td>
+                                <td>
+                                    <span class="badge badge-sm badge-ghost" x-text="user.role || 'User'"></span>
+                                </td>
+                                <td class="text-center">
+                                    <input
+                                        type="checkbox"
+                                        class="toggle toggle-success"
+                                        :checked="user.qr_signon_enrolled"
+                                        @change="toggleEnrollment(user)"
+                                        :disabled="user.toggling"
+                                    />
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+
+                <div x-show="users.length === 0 && !loading" class="text-center py-12 text-base-content/50">
+                    No active users found for this tenant
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div x-show="toast.show" x-transition class="toast toast-top toast-end z-50" x-cloak>
+        <div class="alert" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'">
+            <span x-text="toast.message"></span>
+        </div>
+    </div>
+</div>
+
+<script>
+function enrollment() {
+    return {
+        currentUser: null,
+        selectedTenantId: '',
+        tenants: [],
+        users: [],
+        loading: false,
+        toast: { show: false, message: '', type: 'success' },
+
+        async init() {
+            const resp = await fetch('/admin/auth/me', { credentials: 'same-origin' });
+            if (!resp.ok) { window.location.href = '/admin/login'; return; }
+            const data = await resp.json();
+            this.currentUser = data.user;
+
+            if (this.currentUser.role === 'super_admin') {
+                await this.loadTenants();
+            } else {
+                this.selectedTenantId = this.currentUser.tenant_id;
+                await this.loadUsers();
+            }
+        },
+
+        async loadTenants() {
+            const resp = await fetch('/admin/tenants/data', { credentials: 'same-origin' });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.success) this.tenants = data.tenants || [];
+            }
+        },
+
+        async loadUsers() {
+            if (!this.selectedTenantId) return;
+            this.loading = true;
+            try {
+                const resp = await fetch(`/admin/qr-signons/enrollment/data?tenant_id=${this.selectedTenantId}`, { credentials: 'same-origin' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.success) this.users = data.users.map(u => ({ ...u, toggling: false }));
+                }
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        async toggleEnrollment(user) {
+            user.toggling = true;
+            try {
+                const resp = await fetch(`/admin/users/${user.id}/qr-enrollment/toggle`, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    user.qr_signon_enrolled = data.enrolled;
+                    this.showToast(`${user.name} ${data.enrolled ? 'enrolled' : 'unenrolled'}`, 'success');
+                } else {
+                    this.showToast(data.error || 'Failed', 'error');
+                }
+            } catch (err) {
+                this.showToast('Failed to update', 'error');
+            } finally {
+                user.toggling = false;
+            }
+        },
+
+        async enrollAll(enroll) {
+            for (const user of this.users) {
+                if (user.qr_signon_enrolled !== enroll) {
+                    await this.toggleEnrollment(user);
+                }
+            }
+        },
+
+        showToast(message, type = 'success') {
+            this.toast = { show: true, message, type };
+            setTimeout(() => { this.toast.show = false; }, 3000);
+        }
+    };
+}
+</script>
+{% endblock %}

@@ -1,6 +1,6 @@
 {% extends "layouts/base.html" %}
 
-{% block title %}User Management{% endblock %}
+{% block title %}Team{% endblock %}
 
 {% block content %}
 <div x-data="userManagement()" x-init="loadUsers()">
@@ -8,8 +8,8 @@
     <!-- Header -->
     <div class="mb-8 flex justify-between items-center">
         <div>
-            <h1 class="text-4xl font-bold">User Management</h1>
-            <p class="text-base-content/70 mt-2">Manage your team members and their access</p>
+            <h1 class="text-4xl font-bold">Team</h1>
+            <p class="text-base-content/70 mt-2">Manage your team members, skills, and QR sign-on enrollment</p>
         </div>
         <div class="flex items-center gap-2">
             <!-- Tenant Switcher (Super Admin Only) -->
@@ -83,6 +83,7 @@
                             <th>Phone Number</th>
                             <th>Role</th>
                             <th>Skills</th>
+                            <th class="text-center">QR Enrolled</th>
                             <th>Status</th>
                             <th>Actions</th>
                         </tr>
@@ -153,6 +154,15 @@
                                             <span class="text-base-content/50 text-sm ml-2">No skills assigned</span>
                                         </template>
                                     </div>
+                                </td>
+                                <td class="text-center">
+                                    <input
+                                        type="checkbox"
+                                        class="toggle toggle-sm toggle-info"
+                                        :checked="user.qr_signon_enrolled"
+                                        @change="toggleQrEnrollment(userIndex)"
+                                        :disabled="user.togglingQr"
+                                    />
                                 </td>
                                 <td>
                                     <div class="flex items-center gap-2">
@@ -520,7 +530,7 @@ function userManagement() {
                 if (response.ok) {
                     const data = await response.json();
                     if (data.success) {
-                        this.users = data.users.map(u => ({...u, toggling: false}));
+                        this.users = data.users.map(u => ({...u, toggling: false, togglingQr: false}));
                     } else {
                         this.error = data.error || 'Failed to load users';
                     }
@@ -561,6 +571,34 @@ function userManagement() {
                 this.showToast('Connection error', 'error');
             } finally {
                 user.toggling = false;
+            }
+        },
+
+        async toggleQrEnrollment(userIndex) {
+            const user = this.users[userIndex];
+            user.togglingQr = true;
+
+            try {
+                const response = await fetch(`/admin/users/${user.id}/qr-enrollment/toggle`, {
+                    method: 'POST',
+                    credentials: 'same-origin'
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        this.users[userIndex].qr_signon_enrolled = data.enrolled;
+                        this.showToast(`${user.name} ${data.enrolled ? 'enrolled in' : 'removed from'} QR sign-on`);
+                    } else {
+                        this.showToast('Failed to update enrollment', 'error');
+                    }
+                } else {
+                    this.showToast('Failed to update enrollment', 'error');
+                }
+            } catch (err) {
+                this.showToast('Connection error', 'error');
+            } finally {
+                user.togglingQr = false;
             }
         },
 

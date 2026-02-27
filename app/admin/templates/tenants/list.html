@@ -1,138 +1,9 @@
 {% extends "layouts/base.html" %}
 
-{% block title %}Tenant Management{% endblock %}
+{% block title %}Settings{% endblock %}
 
 {% block content %}
-<div x-data="{
-    tenants: [],
-    loading: true,
-    error: null,
-    isAuthenticated: false,
-    isSuperAdmin: false,
-    tenantSkills: {},
-    loadingSkills: {},
-    skillsExpanded: {},
-    toast: { show: false, message: '', type: 'success' },
-
-    showToast(message, type = 'success') {
-        this.toast.message = message;
-        this.toast.type = type;
-        this.toast.show = true;
-        setTimeout(() => { this.toast.show = false; }, 3000);
-    },
-
-    async checkAuth() {
-        try {
-            const response = await fetch('/admin/auth/me', {
-                credentials: 'same-origin'
-            });
-            if (response.ok) {
-                const data = await response.json();
-                this.isAuthenticated = true;
-                this.isSuperAdmin = data.user?.role === 'super_admin';
-                return true;
-            } else {
-                this.isAuthenticated = false;
-                return false;
-            }
-        } catch (err) {
-            this.isAuthenticated = false;
-            return false;
-        }
-    },
-
-    async loadTenants() {
-        const isAuth = await this.checkAuth();
-        if (!isAuth) {
-            this.loading = false;
-            window.location.href = '/admin/login';
-            return;
-        }
-
-        try {
-            const response = await fetch('/admin/tenants/data', {
-                credentials: 'same-origin'
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                if (data.success) {
-                    this.tenants = data.tenants;
-                } else {
-                    this.error = data.error || 'Failed to load tenant';
-                }
-            } else if (response.status === 401) {
-                window.location.href = '/admin/login';
-            } else {
-                this.error = 'Failed to load tenant';
-            }
-        } catch (err) {
-            this.error = 'Connection error. Please try again.';
-        } finally {
-            this.loading = false;
-        }
-    },
-
-    async loadTenantSkills(tenantId) {
-        this.loadingSkills[tenantId] = true;
-        try {
-            const response = await fetch(`/admin/tenants/${tenantId}/skills`, {
-                credentials: 'same-origin'
-            });
-            if (response.ok) {
-                const data = await response.json();
-                if (data.success) {
-                    this.tenantSkills[tenantId] = data.skills;
-                }
-            } else if (response.status === 401) {
-                window.location.href = '/admin/login';
-            }
-        } catch (err) {
-            this.showToast('Failed to load skills', 'error');
-        } finally {
-            this.loadingSkills[tenantId] = false;
-        }
-    },
-
-    async toggleSkill(tenantId, skillId, skillIndex) {
-        const skill = this.tenantSkills[tenantId][skillIndex];
-        const wasEnabled = skill.is_enabled;
-        try {
-            const response = await fetch(`/admin/tenants/${tenantId}/skills/${skillId}/toggle`, {
-                method: 'POST',
-                credentials: 'same-origin'
-            });
-            if (response.ok) {
-                const data = await response.json();
-                if (data.success) {
-                    this.tenantSkills[tenantId][skillIndex].is_enabled = data.is_enabled;
-                    // Update the count on the tenant object
-                    const tenant = this.tenants.find(t => t.id === tenantId);
-                    if (tenant) {
-                        tenant.enabled_skills_count = (tenant.enabled_skills_count || 0) + (data.is_enabled ? 1 : -1);
-                    }
-                    this.showToast(
-                        `${skill.name} ${data.is_enabled ? 'enabled' : 'disabled'} for this tenant`,
-                        'success'
-                    );
-                } else {
-                    this.showToast(data.error || 'Failed to update skill', 'error');
-                }
-            } else {
-                this.showToast('Failed to update skill', 'error');
-            }
-        } catch (err) {
-            this.showToast('Failed to update skill', 'error');
-        }
-    },
-
-    toggleSkillsPanel(tenantId) {
-        this.skillsExpanded[tenantId] = !this.skillsExpanded[tenantId];
-        if (this.skillsExpanded[tenantId] && !this.tenantSkills[tenantId]) {
-            this.loadTenantSkills(tenantId);
-        }
-    }
-}" x-init="loadTenants()">
+<div x-data="settingsPage()" x-init="init()">
 
     <!-- Toast Notification -->
     <div x-show="toast.show" x-transition x-cloak
@@ -144,14 +15,14 @@
 
     <!-- Header -->
     <div class="mb-8">
-        <h1 class="text-4xl font-bold">Tenant Management</h1>
-        <p class="text-base-content/70 mt-2">View and manage tenant configuration</p>
+        <h1 class="text-4xl font-bold" x-text="isSuperAdmin ? 'Company Settings' : 'Settings'"></h1>
+        <p class="text-base-content/70 mt-2" x-text="isSuperAdmin ? 'Manage company configurations' : 'Manage your company settings'"></p>
     </div>
 
     <!-- Not Authenticated State -->
     <div x-show="!isAuthenticated" x-cloak class="alert alert-warning">
         <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-        <span>Please login to view tenant information</span>
+        <span>Please login to view settings</span>
     </div>
 
     <!-- Loading State -->
@@ -165,7 +36,7 @@
         <span x-text="error"></span>
     </div>
 
-    <!-- Tenant Cards -->
+    <!-- Company/Tenant Cards -->
     <template x-if="!loading && !error && isAuthenticated && tenants.length > 0">
         <div class="space-y-6">
             <template x-for="tenant in tenants" :key="tenant.id">
@@ -175,12 +46,8 @@
 
                         <!-- Basic Info -->
                         <div>
-                            <h3 class="font-semibold text-lg mb-3">Basic Information</h3>
-                            <div class="space-y-3">
-                                <div>
-                                    <label class="text-sm text-base-content/70">Tenant ID</label>
-                                    <div class="font-mono text-sm bg-base-200 p-2 rounded" x-text="tenant.id"></div>
-                                </div>
+                            <h3 class="font-semibold text-lg mb-3">Company Information</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
                                     <label class="text-sm text-base-content/70">Company Name</label>
                                     <div class="text-lg" x-text="tenant.name"></div>
@@ -189,9 +56,154 @@
                                     <label class="text-sm text-base-content/70">Timezone</label>
                                     <div x-text="tenant.timezone || 'Australia/Sydney'"></div>
                                 </div>
+                                <template x-if="isSuperAdmin">
+                                    <div>
+                                        <label class="text-sm text-base-content/70">ID</label>
+                                        <div class="font-mono text-sm bg-base-200 p-2 rounded" x-text="tenant.id"></div>
+                                    </div>
+                                </template>
                                 <div>
                                     <label class="text-sm text-base-content/70">Created</label>
                                     <div x-text="new Date(tenant.created_at).toLocaleDateString()"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- QR Sign-On Configuration -->
+                        <div>
+                            <div class="divider"></div>
+                            <div class="cursor-pointer select-none"
+                                 @click="toggleQrPanel(tenant.id)">
+                                <div class="flex justify-between items-center">
+                                    <h3 class="font-semibold text-lg">QR Sign-On Settings</h3>
+                                    <div class="flex items-center gap-2">
+                                        <span class="badge" :class="qrConfig[tenant.id]?.is_enabled ? 'badge-success' : 'badge-ghost'"
+                                              x-text="qrConfig[tenant.id]?.is_enabled ? 'Enabled' : 'Disabled'"></span>
+                                        <svg xmlns="http://www.w3.org/2000/svg"
+                                             class="h-5 w-5 transition-transform duration-200"
+                                             :class="{'rotate-180': qrExpanded[tenant.id]}"
+                                             fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                                        </svg>
+                                    </div>
+                                </div>
+                                <p class="text-sm text-base-content/50 mt-1">QR code scanning, SMS reminders, and sign-on messages</p>
+                            </div>
+
+                            <div x-show="qrExpanded[tenant.id]" x-transition x-cloak class="mt-4">
+                                <!-- Loading state -->
+                                <div x-show="loadingQr[tenant.id]" class="flex justify-center py-6">
+                                    <span class="loading loading-spinner loading-md"></span>
+                                </div>
+
+                                <div x-show="!loadingQr[tenant.id]" class="space-y-4">
+                                    <div class="form-control">
+                                        <label class="label cursor-pointer justify-start gap-4">
+                                            <input type="checkbox" class="toggle toggle-primary toggle-lg"
+                                                   x-model="qrConfig[tenant.id].is_enabled" />
+                                            <span class="label-text text-lg font-semibold">Enable QR Sign-On</span>
+                                        </label>
+                                    </div>
+
+                                    <div>
+                                        <h4 class="font-medium mb-2">SMS Reminders</h4>
+                                        <div class="form-control mb-2">
+                                            <label class="label cursor-pointer justify-start gap-4">
+                                                <input type="checkbox" class="toggle toggle-success"
+                                                       x-model="qrConfig[tenant.id].reminder_enabled" />
+                                                <span class="label-text">Enable SMS Reminders</span>
+                                            </label>
+                                        </div>
+                                        <div class="grid grid-cols-2 gap-2 max-w-sm">
+                                            <div class="form-control">
+                                                <label class="label py-1"><span class="label-text text-xs">First Reminder</span></label>
+                                                <input type="time" class="input input-bordered input-sm"
+                                                       x-model="qrConfig[tenant.id].first_reminder_time" />
+                                            </div>
+                                            <div class="form-control">
+                                                <label class="label py-1"><span class="label-text text-xs">Second Reminder</span></label>
+                                                <input type="time" class="input input-bordered input-sm"
+                                                       x-model="qrConfig[tenant.id].second_reminder_time" />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="form-control">
+                                        <label class="label py-1"><span class="label-text">Post Sign-On Message</span></label>
+                                        <textarea class="textarea textarea-bordered h-20" placeholder="Remember to complete your health and safety sign-in form."
+                                                  x-model="qrConfig[tenant.id].post_signon_message"></textarea>
+                                    </div>
+
+                                    <div class="flex justify-end">
+                                        <button class="btn btn-primary btn-sm" @click="saveQrConfig(tenant.id)"
+                                                :disabled="savingQr[tenant.id]">
+                                            <span x-show="!savingQr[tenant.id]">Save QR Settings</span>
+                                            <span x-show="savingQr[tenant.id]" class="loading loading-spinner loading-sm"></span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Phone Numbers Configuration -->
+                        <div>
+                            <div class="divider"></div>
+                            <div class="cursor-pointer select-none"
+                                 @click="togglePhonePanel(tenant.id)">
+                                <div class="flex justify-between items-center">
+                                    <h3 class="font-semibold text-lg">Phone Numbers</h3>
+                                    <svg xmlns="http://www.w3.org/2000/svg"
+                                         class="h-5 w-5 transition-transform duration-200"
+                                         :class="{'rotate-180': phoneExpanded[tenant.id]}"
+                                         fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                                    </svg>
+                                </div>
+                                <p class="text-sm text-base-content/50 mt-1">Jill and manager contact numbers for this company</p>
+                            </div>
+
+                            <div x-show="phoneExpanded[tenant.id]" x-transition x-cloak class="mt-4">
+                                <!-- Loading state -->
+                                <div x-show="loadingQr[tenant.id]" class="flex justify-center py-6">
+                                    <span class="loading loading-spinner loading-md"></span>
+                                </div>
+
+                                <div x-show="!loadingQr[tenant.id]" class="space-y-3">
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl">
+                                        <div class="form-control">
+                                            <label class="label py-1"><span class="label-text text-xs">Jill Phone Number</span></label>
+                                            <input type="tel" class="input input-bordered input-sm" placeholder="+61 468 086 094"
+                                                   x-model="qrConfig[tenant.id].jill_phone_number"
+                                                   :disabled="!isSuperAdmin" />
+                                            <label class="label py-0"><span class="label-text-alt text-base-content/40">Shown in SMS reminders: "Call Jill on..."</span></label>
+                                        </div>
+                                        <div class="form-control">
+                                            <label class="label py-1"><span class="label-text text-xs">Manager Phone Number</span></label>
+                                            <input type="tel" class="input input-bordered input-sm" placeholder="+61 400 000 000"
+                                                   x-model="qrConfig[tenant.id].manager_phone_number"
+                                                   :disabled="!isSuperAdmin" />
+                                            <label class="label py-0"><span class="label-text-alt text-base-content/40">Shown to unregistered QR users</span></label>
+                                        </div>
+                                    </div>
+                                    <template x-if="isSuperAdmin">
+                                        <div class="max-w-sm">
+                                            <div class="form-control">
+                                                <label class="label py-1"><span class="label-text text-xs">SMS From Number (Twilio)</span></label>
+                                                <input type="tel" class="input input-bordered input-sm" placeholder="Uses system default if empty"
+                                                       x-model="qrConfig[tenant.id].twilio_from_number" />
+                                                <label class="label py-0"><span class="label-text-alt text-base-content/40">Twilio number to send SMS reminders from</span></label>
+                                            </div>
+                                        </div>
+                                    </template>
+                                    <template x-if="isSuperAdmin">
+                                        <div class="flex justify-end pt-2">
+                                            <button class="btn btn-primary btn-sm" @click="savePhoneConfig(tenant.id)"
+                                                    :disabled="savingPhone[tenant.id]">
+                                                <span x-show="!savingPhone[tenant.id]">Save Phone Settings</span>
+                                                <span x-show="savingPhone[tenant.id]" class="loading loading-spinner loading-sm"></span>
+                                            </button>
+                                        </div>
+                                    </template>
                                 </div>
                             </div>
                         </div>
@@ -215,16 +227,14 @@
                                             </svg>
                                         </div>
                                     </div>
-                                    <p class="text-sm text-base-content/50 mt-1">Control which skills are available to this tenant's users</p>
+                                    <p class="text-sm text-base-content/50 mt-1">Control which skills are available to this company's users</p>
                                 </div>
 
                                 <div x-show="skillsExpanded[tenant.id]" x-transition x-cloak class="mt-4">
-                                    <!-- Loading state -->
                                     <div x-show="loadingSkills[tenant.id]" class="flex justify-center py-6">
                                         <span class="loading loading-spinner loading-md"></span>
                                     </div>
 
-                                    <!-- Skills grid -->
                                     <div x-show="!loadingSkills[tenant.id] && tenantSkills[tenant.id]"
                                          class="grid grid-cols-1 md:grid-cols-2 gap-3">
                                         <template x-for="(skill, skillIndex) in (tenantSkills[tenant.id] || [])" :key="skill.id">
@@ -241,7 +251,6 @@
                                         </template>
                                     </div>
 
-                                    <!-- Empty state -->
                                     <div x-show="!loadingSkills[tenant.id] && (!tenantSkills[tenant.id] || tenantSkills[tenant.id].length === 0)"
                                          class="text-center py-6 text-base-content/50">
                                         No skills configured in the system yet.
@@ -255,4 +264,242 @@
         </div>
     </template>
 </div>
+
+<script>
+function settingsPage() {
+    return {
+        tenants: [],
+        loading: true,
+        error: null,
+        isAuthenticated: false,
+        isSuperAdmin: false,
+
+        // Skills
+        tenantSkills: {},
+        loadingSkills: {},
+        skillsExpanded: {},
+
+        // QR Config
+        qrConfig: {},
+        qrExpanded: {},
+        loadingQr: {},
+        savingQr: {},
+
+        // Phone Numbers
+        phoneExpanded: {},
+        savingPhone: {},
+
+        toast: { show: false, message: '', type: 'success' },
+
+        showToast(message, type = 'success') {
+            this.toast.message = message;
+            this.toast.type = type;
+            this.toast.show = true;
+            setTimeout(() => { this.toast.show = false; }, 3000);
+        },
+
+        async init() {
+            const isAuth = await this.checkAuth();
+            if (!isAuth) {
+                this.loading = false;
+                window.location.href = '/admin/login';
+                return;
+            }
+            await this.loadTenants();
+        },
+
+        async checkAuth() {
+            try {
+                const response = await fetch('/admin/auth/me', { credentials: 'same-origin' });
+                if (response.ok) {
+                    const data = await response.json();
+                    this.isAuthenticated = true;
+                    this.isSuperAdmin = data.user?.role === 'super_admin';
+                    return true;
+                }
+                this.isAuthenticated = false;
+                return false;
+            } catch (err) {
+                this.isAuthenticated = false;
+                return false;
+            }
+        },
+
+        async loadTenants() {
+            try {
+                const response = await fetch('/admin/tenants/data', { credentials: 'same-origin' });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        this.tenants = data.tenants;
+                        // Init QR config defaults for each tenant
+                        for (const t of this.tenants) {
+                            this.qrConfig[t.id] = this._defaultQrConfig();
+                            this.qrExpanded[t.id] = false;
+                            this.loadingQr[t.id] = false;
+                            this.savingQr[t.id] = false;
+                            this.phoneExpanded[t.id] = false;
+                            this.savingPhone[t.id] = false;
+                        }
+                    } else {
+                        this.error = data.error || 'Failed to load settings';
+                    }
+                } else if (response.status === 401) {
+                    window.location.href = '/admin/login';
+                } else {
+                    this.error = 'Failed to load settings';
+                }
+            } catch (err) {
+                this.error = 'Connection error. Please try again.';
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        _defaultQrConfig() {
+            return {
+                is_enabled: false,
+                reminder_enabled: true,
+                first_reminder_time: '17:30',
+                second_reminder_time: '19:00',
+                jill_phone_number: '',
+                manager_phone_number: '',
+                post_signon_message: 'Remember to complete your health and safety sign-in form.',
+                twilio_from_number: '',
+            };
+        },
+
+        // --- QR Config ---
+        async toggleQrPanel(tenantId) {
+            this.qrExpanded[tenantId] = !this.qrExpanded[tenantId];
+            if (this.qrExpanded[tenantId] && !this._qrLoaded?.[tenantId]) {
+                await this.loadQrConfig(tenantId);
+            }
+        },
+
+        async loadQrConfig(tenantId) {
+            this.loadingQr[tenantId] = true;
+            try {
+                const resp = await fetch(`/admin/qr-signons/config/data?tenant_id=${tenantId}`, { credentials: 'same-origin' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.success && data.config) {
+                        this.qrConfig[tenantId] = { ...this._defaultQrConfig(), ...data.config };
+                    }
+                }
+                if (!this._qrLoaded) this._qrLoaded = {};
+                this._qrLoaded[tenantId] = true;
+            } finally {
+                this.loadingQr[tenantId] = false;
+            }
+        },
+
+        async saveQrConfig(tenantId) {
+            this.savingQr[tenantId] = true;
+            try {
+                const resp = await fetch('/admin/qr-signons/config/update', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ...this.qrConfig[tenantId], tenant_id: tenantId })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.showToast('QR settings saved');
+                } else {
+                    this.showToast(data.error || 'Failed to save', 'error');
+                }
+            } catch (err) {
+                this.showToast('Failed to save', 'error');
+            } finally {
+                this.savingQr[tenantId] = false;
+            }
+        },
+
+        // --- Skills ---
+        async loadTenantSkills(tenantId) {
+            this.loadingSkills[tenantId] = true;
+            try {
+                const response = await fetch(`/admin/tenants/${tenantId}/skills`, { credentials: 'same-origin' });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        this.tenantSkills[tenantId] = data.skills;
+                    }
+                } else if (response.status === 401) {
+                    window.location.href = '/admin/login';
+                }
+            } catch (err) {
+                this.showToast('Failed to load skills', 'error');
+            } finally {
+                this.loadingSkills[tenantId] = false;
+            }
+        },
+
+        async toggleSkill(tenantId, skillId, skillIndex) {
+            const skill = this.tenantSkills[tenantId][skillIndex];
+            try {
+                const response = await fetch(`/admin/tenants/${tenantId}/skills/${skillId}/toggle`, {
+                    method: 'POST',
+                    credentials: 'same-origin'
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        this.tenantSkills[tenantId][skillIndex].is_enabled = data.is_enabled;
+                        const tenant = this.tenants.find(t => t.id === tenantId);
+                        if (tenant) {
+                            tenant.enabled_skills_count = (tenant.enabled_skills_count || 0) + (data.is_enabled ? 1 : -1);
+                        }
+                        this.showToast(`${skill.name} ${data.is_enabled ? 'enabled' : 'disabled'}`);
+                    } else {
+                        this.showToast(data.error || 'Failed to update skill', 'error');
+                    }
+                } else {
+                    this.showToast('Failed to update skill', 'error');
+                }
+            } catch (err) {
+                this.showToast('Failed to update skill', 'error');
+            }
+        },
+
+        toggleSkillsPanel(tenantId) {
+            this.skillsExpanded[tenantId] = !this.skillsExpanded[tenantId];
+            if (this.skillsExpanded[tenantId] && !this.tenantSkills[tenantId]) {
+                this.loadTenantSkills(tenantId);
+            }
+        },
+
+        // --- Phone Numbers ---
+        async togglePhonePanel(tenantId) {
+            this.phoneExpanded[tenantId] = !this.phoneExpanded[tenantId];
+            if (this.phoneExpanded[tenantId] && !this._qrLoaded?.[tenantId]) {
+                await this.loadQrConfig(tenantId);
+            }
+        },
+
+        async savePhoneConfig(tenantId) {
+            this.savingPhone[tenantId] = true;
+            try {
+                const resp = await fetch('/admin/qr-signons/config/update', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ...this.qrConfig[tenantId], tenant_id: tenantId })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.showToast('Phone settings saved');
+                } else {
+                    this.showToast(data.error || 'Failed to save', 'error');
+                }
+            } catch (err) {
+                this.showToast('Failed to save', 'error');
+            } finally {
+                this.savingPhone[tenantId] = false;
+            }
+        }
+    };
+}
+</script>
 {% endblock %}

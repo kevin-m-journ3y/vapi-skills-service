@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     RESEND_API_KEY: Optional[str] = None
     RESEND_FROM_EMAIL: str = "noreply@journeybank.com.au"
 
+    # QR Sign-On
+    QR_BASE_URL: Optional[str] = None  # Override for QR code URLs (e.g., custom domain on Vercel later)
+
+    # Twilio SMS (for QR sign-on reminders)
+    TWILIO_ACCOUNT_SID: Optional[str] = None
+    TWILIO_AUTH_TOKEN: Optional[str] = None
+    TWILIO_FROM_NUMBER: Optional[str] = None
+
     @property
     def webhook_base_url(self) -> str:
         """

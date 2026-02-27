@@ -1,0 +1,218 @@
+{% extends "layouts/base.html" %}
+{% block title %}Sign-Ons{% endblock %}
+{% block content %}
+<div x-data="signonsReport()" x-init="init()">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-4xl font-bold">Sign-Ons</h1>
+            <p class="text-base-content/70 mt-2">Track sign-on activity across sites</p>
+        </div>
+        <button class="btn btn-outline btn-sm" @click="exportCSV()" x-show="signons.length > 0">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+            Export CSV
+        </button>
+    </div>
+
+    <!-- Tenant Switcher -->
+    <template x-if="currentUser?.role === 'super_admin'">
+        <div class="mb-4">
+            <select class="select select-bordered w-full max-w-xs" x-model="selectedTenantId" @change="loadData()">
+                <option value="">Select Tenant</option>
+                <template x-for="t in tenants" :key="t.id">
+                    <option :value="t.id" x-text="t.name"></option>
+                </template>
+            </select>
+        </div>
+    </template>
+
+    <!-- Filters -->
+    <div class="card bg-base-100 shadow mb-4" x-show="selectedTenantId">
+        <div class="card-body py-3">
+            <div class="flex flex-wrap gap-3 items-end">
+                <div class="form-control">
+                    <label class="label label-text text-xs">From</label>
+                    <input type="date" class="input input-bordered input-sm" x-model="dateFrom" @change="loadData()" />
+                </div>
+                <div class="form-control">
+                    <label class="label label-text text-xs">To</label>
+                    <input type="date" class="input input-bordered input-sm" x-model="dateTo" @change="loadData()" />
+                </div>
+                <div class="flex gap-1">
+                    <button class="btn btn-xs" @click="setPreset('today')">Today</button>
+                    <button class="btn btn-xs" @click="setPreset('week')">This Week</button>
+                    <button class="btn btn-xs" @click="setPreset('month')">This Month</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6" x-show="selectedTenantId">
+        <div class="stat bg-base-100 rounded-box shadow">
+            <div class="stat-title">Total Sign-Ons</div>
+            <div class="stat-value text-primary" x-text="stats.total || 0"></div>
+        </div>
+        <div class="stat bg-base-100 rounded-box shadow">
+            <div class="stat-title">Currently Active</div>
+            <div class="stat-value text-warning" x-text="stats.active || 0"></div>
+        </div>
+        <div class="stat bg-base-100 rounded-box shadow">
+            <div class="stat-title">Signed Off</div>
+            <div class="stat-value text-success" x-text="stats.signed_off || 0"></div>
+        </div>
+    </div>
+
+    <!-- Table -->
+    <div class="card bg-base-100 shadow-xl" x-show="selectedTenantId">
+        <div class="card-body p-0">
+            <div x-show="loading" class="flex justify-center py-12">
+                <span class="loading loading-spinner loading-lg"></span>
+            </div>
+
+            <div x-show="!loading" class="overflow-x-auto">
+                <table class="table table-zebra">
+                    <thead>
+                        <tr>
+                            <th>User</th>
+                            <th>Site</th>
+                            <th>Signed On</th>
+                            <th>Signed Off</th>
+                            <th>Duration</th>
+                            <th>Status</th>
+                            <th>Method</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="s in signons" :key="s.id">
+                            <tr>
+                                <td x-text="s.user_name"></td>
+                                <td x-text="s.site_name"></td>
+                                <td x-text="formatDateTime(s.signed_on_at)"></td>
+                                <td x-text="s.signed_off_at ? formatDateTime(s.signed_off_at) : '-'"></td>
+                                <td x-text="calcDuration(s)"></td>
+                                <td>
+                                    <span class="badge badge-sm" :class="s.status === 'active' ? 'badge-warning' : 'badge-success'" x-text="s.status"></span>
+                                </td>
+                                <td>
+                                    <span class="text-sm text-base-content/60" x-text="s.signoff_method || '-'"></span>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+
+                <div x-show="signons.length === 0 && !loading" class="text-center py-12 text-base-content/50">
+                    No sign-on records found for selected filters
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function signonsReport() {
+    return {
+        currentUser: null,
+        selectedTenantId: '',
+        tenants: [],
+        signons: [],
+        stats: {},
+        loading: false,
+        dateFrom: new Date().toISOString().split('T')[0],
+        dateTo: new Date().toISOString().split('T')[0],
+
+        async init() {
+            const resp = await fetch('/admin/auth/me', { credentials: 'same-origin' });
+            if (!resp.ok) { window.location.href = '/admin/login'; return; }
+            const data = await resp.json();
+            this.currentUser = data.user;
+
+            if (this.currentUser.role === 'super_admin') {
+                await this.loadTenants();
+            } else {
+                this.selectedTenantId = this.currentUser.tenant_id;
+                await this.loadData();
+            }
+        },
+
+        async loadTenants() {
+            const resp = await fetch('/admin/tenants/data', { credentials: 'same-origin' });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.success) this.tenants = data.tenants || [];
+            }
+        },
+
+        setPreset(preset) {
+            const today = new Date();
+            this.dateTo = today.toISOString().split('T')[0];
+
+            if (preset === 'today') {
+                this.dateFrom = today.toISOString().split('T')[0];
+            } else if (preset === 'week') {
+                const monday = new Date(today);
+                monday.setDate(today.getDate() - today.getDay() + 1);
+                this.dateFrom = monday.toISOString().split('T')[0];
+            } else if (preset === 'month') {
+                const first = new Date(today.getFullYear(), today.getMonth(), 1);
+                this.dateFrom = first.toISOString().split('T')[0];
+            }
+            this.loadData();
+        },
+
+        async loadData() {
+            if (!this.selectedTenantId) return;
+            this.loading = true;
+            try {
+                const params = new URLSearchParams({
+                    tenant_id: this.selectedTenantId,
+                    date_from: this.dateFrom,
+                    date_to: this.dateTo,
+                });
+                const resp = await fetch(`/admin/qr-signons/data?${params}`, { credentials: 'same-origin' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.success) {
+                        this.signons = data.signons;
+                        this.stats = data.stats;
+                    }
+                }
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        formatDateTime(iso) {
+            if (!iso) return '-';
+            const d = new Date(iso);
+            return d.toLocaleDateString('en-AU', { day: '2-digit', month: 'short' }) + ' ' +
+                   d.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: true });
+        },
+
+        calcDuration(signon) {
+            if (!signon.signed_off_at) return '-';
+            const start = new Date(signon.signed_on_at);
+            const end = new Date(signon.signed_off_at);
+            const hours = (end - start) / (1000 * 60 * 60);
+            if (hours < 1) return Math.round(hours * 60) + 'm';
+            return hours.toFixed(1) + 'h';
+        },
+
+        exportCSV() {
+            const headers = ['User', 'Site', 'Signed On', 'Signed Off', 'Status', 'Method'];
+            const rows = this.signons.map(s => [
+                s.user_name, s.site_name, s.signed_on_at, s.signed_off_at || '', s.status, s.signoff_method || ''
+            ]);
+            const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\n');
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `sign-ons-${this.dateFrom}-to-${this.dateTo}.csv`;
+            a.click();
+        }
+    };
+}
+</script>
+{% endblock %}

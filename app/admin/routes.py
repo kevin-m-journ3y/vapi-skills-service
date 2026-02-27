@@ -618,7 +618,7 @@ async def get_users_data(
                         "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
                     },
                     params={
-                        "select": "id,name,phone_number,email,role,is_active,created_at,tenants(name)",
+                        "select": "id,name,phone_number,email,role,is_active,qr_signon_enrolled,created_at,tenants(name)",
                         "order": "created_at.desc",
                         "limit": "100"
                     }
@@ -684,7 +684,7 @@ async def get_users_data(
                 },
                 params={
                     "tenant_id": f"eq.{tenant_id}",
-                    "select": "id,name,phone_number,email,role,is_active,created_at",
+                    "select": "id,name,phone_number,email,role,is_active,qr_signon_enrolled,created_at",
                     "order": "created_at.desc"
                 }
             )
@@ -1124,9 +1124,12 @@ async def create_user(
 @router.get("/admin/sites", response_class=HTMLResponse)
 async def list_sites_page(request: Request):
     """Sites management page"""
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
     return templates.TemplateResponse(
-        "dashboard/sites.html",
-        {"request": request, "page_title": "Site Management"}
+        "sites/list.html",
+        {"request": request}
     )
 
 @router.get("/admin/sites/data")

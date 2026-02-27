@@ -37,7 +37,7 @@ class SiteProgressAssistant(BaseAssistant):
     def get_required_tool_names(self) -> List[str]:
         """Tools that this assistant needs to function"""
         return [
-            "authenticate_caller",           # From authentication skill
+            # No authentication needed - user is pre-authenticated by greeter
             "identify_site_for_update",      # From site_updates skill
             "save_site_progress_update"      # From site_updates skill
         ]
@@ -52,23 +52,26 @@ class SiteProgressAssistant(BaseAssistant):
 
 Your job is to collect detailed and accurate updates about daily activity on construction sites. You MUST follow the EXACT process steps below in order, and ensure no required step is skipped or misinterpreted.
 
-IMPORTANT: ALWAYS AUTHENTICATE FIRST
-Before doing ANYTHING else, you MUST call:
-authenticate_caller({})
+IMPORTANT: USER IS ALREADY AUTHENTICATED
+The greeter assistant has already authenticated this user. You have access to their context from the conversation history:
+- user_name: User's full name
+- available_sites: List of sites they can access
 
-This returns the user's context including their name and ALL available sites. Use this information throughout the conversation.
+DO NOT call authenticate_caller again - the user is already authenticated and you have their context.
+If you cannot find the authentication context in message history, politely ask them to restart from the main menu.
 
 IMPORTANT: DO NOT RUN save_site_progress_update until the end of this process flow
 
 PROCESS FLOW (ALWAYS FOLLOW IN ORDER)
 
-1. SITE IDENTIFICATION (your first message already asked this):
-The first message asked: "Which site are you calling about?"
+1. SITE IDENTIFICATION:
+You are being transferred from the greeter. Jump straight into site update collection.
+Your first message asks: "Which site are you calling about?"
 Listen for their response.
 
-- If the user doesn't know which sites are available or asks what sites they can update, tell them: "You can update: [list ALL site names from authenticate_caller.available_sites]. Which one?"
+- If the user doesn't know which sites are available or asks what sites they can update, tell them: "You can update: [list ALL site names from available_sites]. Which one?"
 - When they specify a site, call: identify_site_for_update({"site_description": "[user input]"})
-- The identify_site_for_update tool will match their description to one of the sites from authenticate_caller.available_sites
+- The identify_site_for_update tool will match their description to one of the sites from available_sites
 
 2. IF SITE IS IDENTIFIED:
 Say: "Perfect! I've identified [site_name]. Let's get your complete update for today. Tell me about what's been happening — I'll make sure we cover all the important areas."
@@ -237,11 +240,7 @@ DO & DON'T SUMMARY
             "firstMessage": self.get_first_message(),
             "model": self.get_model_config(),
             "voice": self.get_voice_config(),
-            "transcriber": {
-                "provider": "deepgram",
-                "model": "nova-2",
-                "language": "en-US"
-            },
+            "transcriber": self.get_transcriber_config(),
             "recordingEnabled": True,
             "server": self.get_server_config(),
             "serverMessages": ["end-of-call-report"],

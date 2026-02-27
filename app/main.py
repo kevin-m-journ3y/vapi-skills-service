@@ -1,5 +1,6 @@
 # app/main.py - Complete FastAPI application with VAPI endpoints
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -32,6 +33,9 @@ from app.assistants.journey_bank_demo import JourneyBankDemoAssistant
 # NEW: Import admin interface
 from app.admin import admin_router
 
+# NEW: Import public routes (QR sign-on)
+from app.public import public_router
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -39,7 +43,21 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Multi-Tenant Document RAG + VAPI Skills System", version="1.0.0")
+
+# Lifespan: start/stop the SMS reminder scheduler
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    from app.services.reminder_scheduler import start_scheduler, stop_scheduler
+    await start_scheduler()
+    yield
+    stop_scheduler()
+
+
+app = FastAPI(
+    title="Multi-Tenant Document RAG + VAPI Skills System",
+    version="1.0.0",
+    lifespan=lifespan,
+)
 
 # ============================================
 # NEW SKILL-BASED ARCHITECTURE
@@ -132,8 +150,15 @@ app.add_middleware(
 from app.admin.auth import router as auth_router
 app.include_router(auth_router)
 
+# Include public router (QR sign-on pages - unauthenticated)
+app.include_router(public_router)
+
 # Include admin router FIRST (before static mount)
 app.include_router(admin_router)
+
+# Include QR sign-on admin routes
+from app.admin.routes_qr import router as qr_admin_router
+app.include_router(qr_admin_router)
 
 # Mount static files for admin interface LAST (catch-all)
 # Handle case where static directory might not exist in deployment
@@ -2197,6 +2222,104 @@ async def debug_session_context(vapi_call_id: str):
             "error": str(e),
             "type": type(e).__name__
         }
+
+
+# ============================================
+# WORKSHOP DEMO - Send Infographic Email
+# ============================================
+
+@app.post("/api/v1/demo/send-workshop-infographic")
+async def send_workshop_infographic(request: Request):
+    """Send AI workshop infographic via Resend. Used by jill-workshop-demo assistant."""
+    try:
+        body = await request.json()
+        message = body.get("message", {})
+        tool_calls = message.get("toolCalls", [])
+
+        # Get arguments from tool call
+        to_email = "kevin.morrell@journ3y.com.au"
+        recipient_name = "there"
+
+        for tool_call in tool_calls:
+            args = tool_call.get("function", {}).get("arguments", "{}")
+            if isinstance(args, str):
+                args = json.loads(args)
+            to_email = args.get("email", to_email)
+            recipient_name = args.get("recipient_name", recipient_name)
+
+        # Send via Resend
+        try:
+            import resend
+            from app.config import settings
+
+            resend_api_key = getattr(settings, 'RESEND_API_KEY', None)
+            from_email = getattr(settings, 'RESEND_FROM_EMAIL', 'noreply@journ3y.com.au')
+
+            if resend_api_key:
+                resend.api_key = resend_api_key
+
+                html_content = f"""
+                <!DOCTYPE html>
+                <html>
+                <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1F2937; margin: 0; padding: 0; background-color: #F3F4F6;">
+                    <div style="max-width: 600px; margin: 0 auto; background-color: #FFFFFF;">
+                        <div style="background: linear-gradient(135deg, #7C3AED 0%, #4F46E5 100%); padding: 32px 24px; text-align: center;">
+                            <h1 style="color: #FFFFFF; margin: 0; font-size: 28px;">JOURN3Y</h1>
+                            <p style="color: #C4B5FD; margin: 8px 0 0 0;">AI Immersion Workshop - MYSTATE Executive Team</p>
+                        </div>
+                        <div style="padding: 32px 24px;">
+                            <p>Hi {recipient_name},</p>
+                            <p>Here's your AI workshop infographic!</p>
+                            <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px; padding: 20px; margin: 24px 0;">
+                                <h2 style="color: #4F46E5; margin: 0 0 16px 0;">Workshop Structure</h2>
+                                <h3 style="font-size: 14px; color: #6B7280; margin: 0 0 8px 0;">Part 1: Enterprise AI Landscape</h3>
+                                <ul style="color: #374151; margin: 0 0 16px 0; padding-left: 20px;">
+                                    <li>Current state of AI in financial services</li>
+                                    <li>Generative AI, automation & AI copilots</li>
+                                    <li>What leading regional banks are doing</li>
+                                </ul>
+                                <h3 style="font-size: 14px; color: #6B7280; margin: 0 0 8px 0;">Part 2: Hands-On Demos</h3>
+                                <ul style="color: #374151; margin: 0; padding-left: 20px;">
+                                    <li>Voice AI assistant (like me!)</li>
+                                    <li>Document processing & analysis</li>
+                                    <li>AI-assisted customer service</li>
+                                </ul>
+                            </div>
+                            <div style="background-color: #EEF2FF; border-radius: 8px; padding: 20px;">
+                                <h2 style="color: #4338CA; margin: 0 0 12px 0;">AI Use Cases for Regional Banking</h2>
+                                <p style="margin: 0;"><strong>Customer Service:</strong> Voice assistants, chatbots, email triage</p>
+                                <p style="margin: 8px 0 0 0;"><strong>Process Automation:</strong> Loan processing, compliance, documents</p>
+                                <p style="margin: 8px 0 0 0;"><strong>Decision Support:</strong> Credit risk, fraud detection</p>
+                                <p style="margin: 8px 0 0 0;"><strong>Employee Productivity:</strong> AI copilots, summaries, drafting</p>
+                            </div>
+                            <p style="margin-top: 24px; color: #6B7280;">Good luck with the workshop! 🚀</p>
+                        </div>
+                        <div style="background-color: #F9FAFB; padding: 24px; text-align: center; border-top: 1px solid #E5E7EB;">
+                            <p style="margin: 0; color: #9CA3AF; font-size: 12px;">Sent by Jill • {datetime.now().strftime('%d %B %Y at %I:%M %p')}</p>
+                        </div>
+                    </div>
+                </body>
+                </html>
+                """
+
+                email = resend.Emails.send({
+                    "from": f"Jill at JOURN3Y <{from_email}>",
+                    "to": [to_email],
+                    "subject": "AI Workshop Infographic - MYSTATE Executive Team",
+                    "html": html_content
+                })
+
+                logger.info(f"Workshop infographic sent to {to_email}: {email.get('id')}")
+                return {"results": [{"toolCallId": tool_calls[0]["id"] if tool_calls else "unknown", "result": {"success": True, "message": f"Sent to {to_email}"}}]}
+
+        except Exception as e:
+            logger.error(f"Email error: {e}")
+
+        return {"results": [{"toolCallId": tool_calls[0]["id"] if tool_calls else "unknown", "result": {"success": False, "message": "Email service unavailable"}}]}
+
+    except Exception as e:
+        logger.error(f"Workshop infographic error: {e}")
+        return {"results": [{"toolCallId": "unknown", "result": {"success": False, "message": str(e)}}]}
 
 
 if __name__ == "__main__":

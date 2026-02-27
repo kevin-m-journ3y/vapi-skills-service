@@ -93,6 +93,137 @@ class BaseAssistant(ABC):
         """
         pass
 
+    def get_transcriber_config(self) -> Dict:
+        """
+        Get speech-to-text transcriber configuration for this assistant.
+
+        Uses Deepgram Nova-3 with Keyterm Prompting for construction industry.
+
+        IMPORTANT: Nova-3 uses 'keyterm' (not 'keywords') for vocabulary boosting.
+        - Keyterms preserve formatting (capitalization matters for proper nouns)
+        - Supports multi-word phrases ("concrete pour", "roof trusses")
+        - No intensifiers needed - contextual model-driven recognition
+        - Max ~100 terms (500 tokens)
+
+        Override this method in subclass if different STT configuration is needed.
+
+        Returns:
+            Transcriber config dictionary
+        """
+        return {
+            "provider": "deepgram",
+            "model": "nova-3",
+            "language": "en",
+            # Audio processing settings for noisy construction environments
+            "smartFormat": True,  # Better formatting of numbers, dates, times
+            "endpointing": 400,  # ms of silence before finalizing (lower = more responsive)
+            # Nova-3 Keyterm Prompting (replaces keywords parameter)
+            # Keyterms preserve formatting and support multi-word phrases
+            "keyterm": [
+                # ===========================================
+                # ACTUAL SITE NAMES FROM DATABASE
+                # These are the exact names users will say
+                # ===========================================
+                "156 Potts",
+                "158 Potts",
+                "Bishops Avenue",
+                "Brighton",
+                "CBD Property",
+                "Cranbrook Road",
+                "MK's Leichhardt",
+                "Ocean White House",
+                "Oxford Street",
+                "Smith Build",
+                # Overhead sites (for admin/office work)
+                "Built By MK Prod - Overheads",
+                "JOURN3Y - Overheads",
+                # ===========================================
+                # SKILL ROUTING COMMANDS
+                # Words users say to choose what to do
+                # ===========================================
+                "timesheet",
+                "timesheets",
+                "time sheet",  # Spaced version (commonly misheard)
+                "voice note",
+                "voice notes",
+                "site update",
+                "site progress",
+                # ===========================================
+                # CONSTRUCTION TERMINOLOGY
+                # ===========================================
+                "excavation",
+                "formwork",
+                "concrete pour",
+                "roof trusses",
+                "framing",
+                "foundation",
+                "drywall",
+                "plumbing",
+                "electrical",
+                "HVAC",
+                "masonry",
+                "subcontractor",
+                "remedial work",  # Added - seen in call logs
+                "balcony",  # Added - seen in call logs
+                # ===========================================
+                # TIME-RELATED TERMS
+                # ===========================================
+                "overtime",
+                "start time",
+                "finish time",
+                "break time",
+                "yesterday",  # Added - common for historical logging
+                # ===========================================
+                # ADMINISTRATIVE/OVERHEAD WORK
+                # ===========================================
+                "admin",
+                "office work",
+                "overheads",
+                "paperwork",
+                "general duties"
+            ]
+        }
+
+    def get_stop_speaking_plan(self) -> Dict:
+        """
+        Get configuration for when assistant should stop speaking (interruption detection).
+
+        This controls how Jill detects when the user is speaking and should stop talking.
+        Default uses voice activity detection with 0.5 second threshold (VAPI max).
+
+        For construction workers in noisy environments, we use max allowed threshold
+        plus a longer backoff to prevent false interruptions from background noise.
+
+        Returns:
+            Stop speaking plan config
+        """
+        return {
+            "numWords": 0,  # Use voice activity detection (VAD) instead of waiting for words
+            "voiceSeconds": 0.5,  # Max allowed by VAPI (0.5s of voice before interrupting)
+            "backoffSeconds": 2.0  # Block assistant audio for 2 seconds after user interrupts
+        }
+
+    def get_start_speaking_plan(self) -> Dict:
+        """
+        Get configuration for when assistant should start speaking.
+
+        This controls how long Jill waits after the user stops speaking before responding.
+        Default waits 1.5 seconds to give construction workers time to pause and think.
+
+        Longer wait times (1.2-1.8s) are better for:
+        - Users who naturally pause while thinking
+        - Noisy environments where brief silence might occur
+        - Preventing the assistant from seeming too eager/interrupting
+        - Users who speak in multiple short phrases
+
+        Returns:
+            Start speaking plan config
+        """
+        return {
+            "waitSeconds": 1.5,  # Wait 1.5 seconds after user stops before responding
+            "smartEndpointingEnabled": True  # Use AI to detect natural conversation pauses
+        }
+
     def get_required_tool_names(self) -> List[str]:
         """
         Get list of tool names this assistant needs.
@@ -148,6 +279,9 @@ class BaseAssistant(ABC):
             "name": self.assistant_key,
             "model": model_config,
             "voice": self.get_voice_config(),
+            "transcriber": self.get_transcriber_config(),
+            "stopSpeakingPlan": self.get_stop_speaking_plan(),
+            "startSpeakingPlan": self.get_start_speaking_plan(),
             "firstMessage": self.get_first_message(),
             "firstMessageMode": "assistant-speaks-first"
         }
