@@ -255,6 +255,46 @@ async def authenticate_by_phone(request: dict):
                         "site_address": site.get('address')
                     })
 
+            # Check for QR sign-ons today (timezone-aware)
+            today_start = tenant_tz.localize(datetime.strptime(current_date, '%Y-%m-%d'))
+            today_end = tenant_tz.localize(datetime.strptime(current_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59))
+
+            signons_response = await client.get(
+                f"{settings.SUPABASE_URL}/rest/v1/site_signons",
+                headers={
+                    "apikey": settings.SUPABASE_SERVICE_KEY,
+                    "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}"
+                },
+                params={
+                    "user_id": f"eq.{user['id']}",
+                    "tenant_id": f"eq.{user['tenant_id']}",
+                    "status": "in.(active,signed_off)",
+                    "and": f"(signed_on_at.gte.{today_start.isoformat()},signed_on_at.lte.{today_end.isoformat()})",
+                    "select": "id,site_id,signed_on_at,status",
+                    "order": "signed_on_at.asc",
+                }
+            )
+
+            todays_signons = []
+            if signons_response.status_code == 200:
+                raw_signons = signons_response.json()
+                # Build site name lookup from already-fetched sites
+                site_name_map = {s['site_id']: s['site_name'] for s in available_sites}
+                for s in raw_signons:
+                    signed_on_dt = datetime.fromisoformat(s["signed_on_at"].replace("Z", "+00:00"))
+                    signed_on_local = signed_on_dt.astimezone(tenant_tz)
+                    time_str = signed_on_local.strftime("%-I:%M %p").lower()
+                    todays_signons.append({
+                        "signon_id": s["id"],
+                        "site_id": s["site_id"],
+                        "site_name": site_name_map.get(s["site_id"], "Unknown site"),
+                        "signed_on_time": time_str,
+                        "status": s["status"],
+                    })
+
+            if todays_signons:
+                logger.info(f"Found {len(todays_signons)} QR sign-on(s) today for {user['name']}")
+
             # Generate greeting
             first_name = user['name'].split()[0] if user['name'] else "there"
 
@@ -293,7 +333,9 @@ async def authenticate_by_phone(request: dict):
                     "auth_success": True,
                     "available_skills": available_skills,
                     "available_sites": available_sites,
-                    "site_count": len(available_sites)
+                    "site_count": len(available_sites),
+                    "todays_signons": todays_signons,
+                    "signon_count": len(todays_signons)
                 }
             )
 
@@ -320,7 +362,9 @@ async def authenticate_by_phone(request: dict):
                         "skill_count": len(available_skills),
                         "single_skill_mode": len(available_skills) == 1,
                         "available_sites": available_sites,
-                        "site_count": len(available_sites)
+                        "site_count": len(available_sites),
+                        "todays_signons": todays_signons,
+                        "signon_count": len(todays_signons)
                     }
                 }]
             }

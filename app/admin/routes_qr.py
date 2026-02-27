@@ -516,16 +516,16 @@ async def get_signons_data(
         if user_id:
             params["user_id"] = f"eq.{user_id}"
 
-        # Build timezone-aware date filters
+        # Build timezone-aware date filters (use tz.localize, not .replace(tzinfo=))
         if date_from and date_to:
-            from_dt = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=tz)
-            to_dt = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=tz)
+            from_dt = tz.localize(datetime.strptime(date_from, "%Y-%m-%d"))
+            to_dt = tz.localize(datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59))
             params["and"] = f"(signed_on_at.gte.{from_dt.isoformat()},signed_on_at.lte.{to_dt.isoformat()})"
         elif date_from:
-            from_dt = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=tz)
+            from_dt = tz.localize(datetime.strptime(date_from, "%Y-%m-%d"))
             params["signed_on_at"] = f"gte.{from_dt.isoformat()}"
         elif date_to:
-            to_dt = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=tz)
+            to_dt = tz.localize(datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59))
             params["signed_on_at"] = f"lte.{to_dt.isoformat()}"
 
         resp = await client.get(

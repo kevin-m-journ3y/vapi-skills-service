@@ -1124,13 +1124,11 @@ async def get_signon_data(request: dict):
             current_date = datetime.now(tz).strftime('%Y-%m-%d')
 
         # Query site_signons for today (active or signed_off, not expired)
+        # Must use tz.localize() not .replace(tzinfo=) to get correct DST offset
         tz = pytz.timezone(tenant_timezone)
-        today_start = datetime.strptime(current_date, '%Y-%m-%d').replace(
-            hour=0, minute=0, second=0, tzinfo=tz
-        )
-        today_end = datetime.strptime(current_date, '%Y-%m-%d').replace(
-            hour=23, minute=59, second=59, tzinfo=tz
-        )
+        today_naive = datetime.strptime(current_date, '%Y-%m-%d')
+        today_start = tz.localize(today_naive.replace(hour=0, minute=0, second=0))
+        today_end = tz.localize(today_naive.replace(hour=23, minute=59, second=59))
 
         async with httpx.AsyncClient() as client:
             resp = await client.get(

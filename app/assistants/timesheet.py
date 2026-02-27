@@ -34,13 +34,13 @@ class TimesheetAssistant(BaseAssistant):
         return TIMESHEET_SYSTEM_PROMPT_V2
 
     def get_first_message(self) -> str:
-        """Empty string to trigger model-generated first message after tool call.
+        """Ask which site - prompts user response so model gets a turn to call tools.
 
-        Like the greeter, we return empty so the model generates its first response.
-        The system prompt instructs it to IMMEDIATELY call get_signon_data,
-        then speak based on the result (same pattern as greeter + authenticate_caller).
+        In squad transfers, the model only gets a turn after user responds to firstMessage.
+        We ask which site, then call get_signon_data as the first tool call.
+        If sign-on data exists, it overrides whatever the user said.
         """
-        return ""
+        return "Which site did you work at today? Or say admin if it was office work."
 
     def get_voice_config(self) -> Dict:
         """Jill's voice configuration using ElevenLabs - consistent across all assistants"""
@@ -66,7 +66,6 @@ class TimesheetAssistant(BaseAssistant):
         """Tools that Jill needs to function"""
         return [
             "authenticate_caller",                # From authentication skill
-            "get_signon_data",                    # From timesheet skill - QR sign-on awareness
             "identify_site_for_timesheet",        # From timesheet skill
             "save_timesheet_entry",               # From timesheet skill
             "confirm_and_save_all",               # From timesheet skill
