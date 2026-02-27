@@ -550,6 +550,57 @@ async def get_signons_data(
         return {"success": True, "signons": signons, "stats": stats}
 
 
+@router.post("/admin/qr-signons/{signon_id}/update")
+async def update_signon(signon_id: str, request: Request):
+    """Update sign-on or sign-off time for a record."""
+    user_session = await _get_session_user(request)
+    is_super_admin = user_session.get("role") == "super_admin"
+    body = await request.json()
+
+    async with httpx.AsyncClient() as client:
+        # Verify access - fetch the record
+        check = await client.get(
+            f"{_url()}/rest/v1/site_signons",
+            headers=_headers(),
+            params={"id": f"eq.{signon_id}", "select": "id,tenant_id"},
+        )
+        if check.status_code != 200 or not check.json():
+            return {"success": False, "error": "Sign-on record not found"}
+
+        record = check.json()[0]
+        if not is_super_admin and record["tenant_id"] != user_session.get("tenant_id"):
+            return {"success": False, "error": "Access denied"}
+
+        # Build update payload - only allow specific fields
+        update_data = {}
+        if "signed_on_at" in body and body["signed_on_at"]:
+            update_data["signed_on_at"] = body["signed_on_at"]
+        if "signed_off_at" in body:
+            update_data["signed_off_at"] = body["signed_off_at"] or None
+            # If setting a sign-off time, mark as signed_off
+            if body["signed_off_at"]:
+                update_data["status"] = "signed_off"
+                if not body.get("signoff_method"):
+                    update_data["signoff_method"] = "manual"
+
+        if not update_data:
+            return {"success": False, "error": "No changes provided"}
+
+        resp = await client.patch(
+            f"{_url()}/rest/v1/site_signons",
+            headers={**_headers(), "Prefer": "return=representation"},
+            params={"id": f"eq.{signon_id}"},
+            json=update_data,
+        )
+
+        if resp.status_code in (200, 204):
+            updated = resp.json()[0] if resp.json() else {}
+            return {"success": True, "signon": updated}
+        else:
+            logger.error("Failed to update signon %s: %s", signon_id, resp.text)
+            return {"success": False, "error": "Failed to update"}
+
+
 # ============================================
 # USER ENROLLMENT
 # ============================================
