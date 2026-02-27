@@ -34,13 +34,14 @@ class TimesheetAssistant(BaseAssistant):
         return TIMESHEET_SYSTEM_PROMPT_V2
 
     def get_first_message(self) -> str:
-        """Ask which site - prompts user response so model gets a turn to call tools.
+        """Empty string — model generates first message based on sign-on context.
 
-        In squad transfers, the model only gets a turn after user responds to firstMessage.
-        We ask which site, then call get_signon_data as the first tool call.
-        If sign-on data exists, it overrides whatever the user said.
+        Uses firstMessageMode 'assistant-speaks-first-with-model-generated-message'
+        so the model reads todays_signons from conversation history and either:
+        - Acknowledges sign-on data ("I can see you logged in at CBD Property...")
+        - Asks which site if no sign-ons ("Which site did you work at today?")
         """
-        return "Which site did you work at today? Or say admin if it was office work."
+        return ""
 
     def get_voice_config(self) -> Dict:
         """Jill's voice configuration using ElevenLabs - consistent across all assistants"""

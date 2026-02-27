@@ -136,7 +136,7 @@ async def update_timesheet_in_vapi():
         patch_payload = {
             "model": model_config,
             "firstMessage": assistant_def.get_first_message(),
-            "firstMessageMode": "assistant-speaks-first",
+            "firstMessageMode": "assistant-speaks-first-with-model-generated-message",
             "transcriber": assistant_def.get_transcriber_config(),
         }
 
