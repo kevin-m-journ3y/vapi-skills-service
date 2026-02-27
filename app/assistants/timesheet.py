@@ -34,13 +34,13 @@ class TimesheetAssistant(BaseAssistant):
         return TIMESHEET_SYSTEM_PROMPT_V2
 
     def get_first_message(self) -> str:
-        """The greeting message Jill speaks first
+        """Empty string to trigger model-generated first message after tool call.
 
-        Note: This is transferred from greeter, so user is already authenticated.
-        The system prompt will use authentication context from message history.
-        This first message should immediately start the timesheet conversation.
+        Like the greeter, we return empty so the model generates its first response.
+        The system prompt instructs it to IMMEDIATELY call get_signon_data,
+        then speak based on the result (same pattern as greeter + authenticate_caller).
         """
-        return "Ok! Let me check if you signed in anywhere today."
+        return ""
 
     def get_voice_config(self) -> Dict:
         """Jill's voice configuration using ElevenLabs - consistent across all assistants"""
