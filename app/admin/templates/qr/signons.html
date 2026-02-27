@@ -107,8 +107,8 @@
                             <th>Status</th>
                         </tr>
                     </thead>
-                    <tbody>
-                        <template x-for="(s, idx) in signons" :key="s.id">
+                    <template x-for="(s, idx) in signons" :key="s.id">
+                        <tbody>
                             <tr class="cursor-pointer hover" @click="s.call_transcript ? (expandedId = expandedId === s.id ? null : s.id) : null">
                                 <td x-text="s.user_name"></td>
                                 <td x-text="s.site_name"></td>
@@ -135,17 +135,14 @@
                                     </svg>
                                 </td>
                             </tr>
-                        </template>
-                        <!-- Transcript expansion rows (rendered separately to avoid template nesting issues) -->
-                        <template x-for="s in signons.filter(s => s.id === expandedId && s.call_transcript)" :key="'t-'+s.id">
-                            <tr class="bg-base-200">
+                            <tr x-show="expandedId === s.id && s.call_transcript" x-cloak class="bg-base-200">
                                 <td colspan="7" class="p-4">
                                     <div class="text-xs font-semibold mb-2 text-base-content/60">Call Transcript</div>
                                     <pre class="text-sm whitespace-pre-wrap font-sans leading-relaxed max-h-64 overflow-y-auto" x-text="s.call_transcript"></pre>
                                 </td>
                             </tr>
-                        </template>
-                    </tbody>
+                        </tbody>
+                    </template>
                 </table>
 
                 <div x-show="signons.length === 0 && !loading" class="text-center py-12 text-base-content/50">

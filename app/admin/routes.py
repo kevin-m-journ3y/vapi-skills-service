@@ -1220,7 +1220,7 @@ async def get_timesheets_data(
             # Build query params
             # Note: sites are stored in entities table, we'll just get site_id and fetch names separately
             params = {
-                "select": "id,work_date,start_time,end_time,hours_worked,work_description,plans_for_tomorrow,site_id,user_id,users(name)",
+                "select": "id,work_date,start_time,end_time,hours_worked,work_description,plans_for_tomorrow,call_transcript,site_id,user_id,users(name)",
                 "order": "work_date.desc,start_time.desc"
             }
 
@@ -1394,7 +1394,7 @@ async def get_timesheets_by_site(
         async with httpx.AsyncClient() as client:
             # Build query params
             params = {
-                "select": "id,work_date,start_time,end_time,hours_worked,work_description,plans_for_tomorrow,site_id,user_id,users(name)",
+                "select": "id,work_date,start_time,end_time,hours_worked,work_description,plans_for_tomorrow,call_transcript,site_id,user_id,users(name)",
                 "order": "work_date.desc,start_time.desc"
             }
 

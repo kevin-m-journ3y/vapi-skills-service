@@ -275,9 +275,9 @@
                                 <th>Description</th>
                             </tr>
                         </thead>
-                        <tbody>
-                            <template x-for="entry in data.entries" :key="entry.id">
-                                <tr>
+                        <template x-for="entry in data.entries" :key="entry.id">
+                            <tbody>
+                                <tr class="hover" :class="entry.call_transcript ? 'cursor-pointer' : ''" @click="entry.call_transcript ? (expandedId = expandedId === entry.id ? null : entry.id) : null">
                                     <td x-text="formatDate(entry.work_date)"></td>
                                     <td x-text="entry.users?.name || 'Unknown'"></td>
                                     <td x-text="entry.site_name || 'Unknown Site'"></td>
@@ -286,12 +286,21 @@
                                     <td>
                                         <div class="badge" :class="getHoursBadgeClass(entry.hours_worked)" x-text="entry.hours_worked + ' hrs'"></div>
                                     </td>
-                                    <td>
+                                    <td class="flex items-center gap-1">
                                         <div class="max-w-xs truncate" x-text="entry.work_description"></div>
+                                        <svg x-show="entry.call_transcript" xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5 opacity-40 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                                        </svg>
                                     </td>
                                 </tr>
-                            </template>
-                        </tbody>
+                                <tr x-show="expandedId === entry.id && entry.call_transcript" x-cloak class="bg-base-200">
+                                    <td colspan="7" class="p-4">
+                                        <div class="text-xs font-semibold mb-2 text-base-content/60">Call Transcript</div>
+                                        <pre class="text-sm whitespace-pre-wrap font-sans leading-relaxed max-h-64 overflow-y-auto" x-text="entry.call_transcript"></pre>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </template>
                     </table>
                 </div>
             </div>
@@ -410,12 +419,12 @@
                                     <th>End Time</th>
                                     <th>Hours</th>
                                     <th>Description</th>
-                                    <th>Plans for Tomorrow</th>
+                                    <th>Notes</th>
                                 </tr>
                             </thead>
-                            <tbody>
-                                <template x-for="entry in data.entries" :key="entry.id">
-                                    <tr>
+                            <template x-for="entry in data.entries" :key="entry.id">
+                                <tbody>
+                                    <tr class="hover" :class="entry.call_transcript ? 'cursor-pointer' : ''" @click="entry.call_transcript ? (expandedId = expandedId === entry.id ? null : entry.id) : null">
                                         <td x-text="formatDate(entry.work_date)"></td>
                                         <td x-text="entry.users?.name || 'Unknown'"></td>
                                         <td x-text="entry.start_time"></td>
@@ -426,12 +435,21 @@
                                         <td>
                                             <div class="max-w-xs truncate" x-text="entry.work_description"></div>
                                         </td>
-                                        <td>
+                                        <td class="flex items-center gap-1">
                                             <div class="max-w-xs truncate" x-text="entry.plans_for_tomorrow || '-'"></div>
+                                            <svg x-show="entry.call_transcript" xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5 opacity-40 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                                            </svg>
                                         </td>
                                     </tr>
-                                </template>
-                            </tbody>
+                                    <tr x-show="expandedId === entry.id && entry.call_transcript" x-cloak class="bg-base-200">
+                                        <td colspan="7" class="p-4">
+                                            <div class="text-xs font-semibold mb-2 text-base-content/60">Call Transcript</div>
+                                            <pre class="text-sm whitespace-pre-wrap font-sans leading-relaxed max-h-64 overflow-y-auto" x-text="entry.call_transcript"></pre>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </template>
                         </table>
                     </div>
                 </div>
@@ -457,6 +475,9 @@ function timesheetReport() {
         endDate: '',
         selectedUserId: '',
         selectedSiteId: '',
+
+        // UI state
+        expandedId: null,
 
         // Dropdown data
         users: [],
@@ -610,6 +631,7 @@ function timesheetReport() {
         async loadData() {
             this.loading = true;
             this.error = null;
+            this.expandedId = null;
 
             try {
                 // Build query params
