@@ -5,7 +5,9 @@ import uuid
 import httpx
 import logging
 from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Request, HTTPException
+from app.auth_utils import hash_password, validate_password_strength
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResponse
 
@@ -487,6 +489,21 @@ async def get_signons_data(
         return {"success": True, "signons": [], "stats": {}}
 
     async with httpx.AsyncClient() as client:
+        # Get tenant timezone for date filtering
+        tz_str = "Australia/Sydney"  # default
+        tz_resp = await client.get(
+            f"{_url()}/rest/v1/tenants",
+            headers=_headers(),
+            params={"id": f"eq.{tenant_id}", "select": "timezone"},
+        )
+        if tz_resp.status_code == 200 and tz_resp.json():
+            tz_str = tz_resp.json()[0].get("timezone") or tz_str
+
+        try:
+            tz = ZoneInfo(tz_str)
+        except Exception:
+            tz = ZoneInfo("Australia/Sydney")
+
         params = {
             "tenant_id": f"eq.{tenant_id}",
             "select": "id,user_id,site_id,signed_on_at,signed_off_at,status,signoff_method,short_code",
@@ -498,15 +515,18 @@ async def get_signons_data(
             params["site_id"] = f"eq.{site_id}"
         if user_id:
             params["user_id"] = f"eq.{user_id}"
-        if date_from:
-            params["signed_on_at"] = f"gte.{date_from}T00:00:00"
-        if date_to:
-            # Append to existing filter with AND
-            if "signed_on_at" in params:
-                params["and"] = f"(signed_on_at.gte.{date_from}T00:00:00,signed_on_at.lte.{date_to}T23:59:59)"
-                del params["signed_on_at"]
-            else:
-                params["signed_on_at"] = f"lte.{date_to}T23:59:59"
+
+        # Build timezone-aware date filters
+        if date_from and date_to:
+            from_dt = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=tz)
+            to_dt = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=tz)
+            params["and"] = f"(signed_on_at.gte.{from_dt.isoformat()},signed_on_at.lte.{to_dt.isoformat()})"
+        elif date_from:
+            from_dt = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=tz)
+            params["signed_on_at"] = f"gte.{from_dt.isoformat()}"
+        elif date_to:
+            to_dt = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=tz)
+            params["signed_on_at"] = f"lte.{to_dt.isoformat()}"
 
         resp = await client.get(
             f"{_url()}/rest/v1/site_signons",
@@ -671,3 +691,206 @@ async def toggle_enrollment(user_id: str, request: Request):
             return {"success": True, "enrolled": new_status}
         else:
             return {"success": False, "error": resp.text}
+
+
+# ============================================
+# TENANT ADMIN MANAGEMENT
+# ============================================
+
+@router.get("/admin/tenants/{tenant_id}/admins")
+async def get_tenant_admins(tenant_id: str, request: Request):
+    """Get all admin users for a tenant."""
+    user_session = await _get_session_user(request)
+    is_super_admin = user_session.get("role") == "super_admin"
+
+    # Tenant admins can view but only for their own tenant
+    if not is_super_admin and tenant_id != user_session.get("tenant_id"):
+        return {"success": False, "error": "Access denied"}
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{_url()}/rest/v1/admin_users",
+            headers=_headers(),
+            params={
+                "tenant_id": f"eq.{tenant_id}",
+                "select": "id,username,email,role,is_active,last_login_at,created_at",
+                "order": "created_at.asc",
+            },
+        )
+        admins = resp.json() if resp.status_code == 200 else []
+
+        # Get permissions for each admin
+        for admin in admins:
+            perm_resp = await client.get(
+                f"{_url()}/rest/v1/admin_user_permissions",
+                headers=_headers(),
+                params={
+                    "admin_user_id": f"eq.{admin['id']}",
+                    "select": "permission_type",
+                },
+            )
+            admin["permissions"] = [p["permission_type"] for p in (perm_resp.json() if perm_resp.status_code == 200 else [])]
+
+        return {"success": True, "admins": admins}
+
+
+@router.post("/admin/tenants/{tenant_id}/admins")
+async def create_tenant_admin(tenant_id: str, request: Request):
+    """Create a new tenant admin user. Super admin only."""
+    user_session = await _get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        return {"success": False, "error": "Super admin access required"}
+
+    body = await request.json()
+    username = body.get("username", "").strip()
+    email = body.get("email", "").strip().lower()
+    password = body.get("password", "")
+
+    if not username or not email or not password:
+        return {"success": False, "error": "Username, email, and password are required"}
+
+    # Validate password strength
+    validation = validate_password_strength(password)
+    if not validation["valid"]:
+        return {"success": False, "error": "Password does not meet requirements", "requirements": validation["requirements"]}
+
+    async with httpx.AsyncClient() as client:
+        # Check for duplicate username or email
+        dup_check = await client.get(
+            f"{_url()}/rest/v1/admin_users",
+            headers=_headers(),
+            params={
+                "or": f"(username.ilike.{username},email.ilike.{email})",
+                "select": "id,username,email",
+            },
+        )
+        if dup_check.status_code == 200 and dup_check.json():
+            existing = dup_check.json()[0]
+            if existing["username"].lower() == username.lower():
+                return {"success": False, "error": "Username already exists"}
+            if existing["email"].lower() == email:
+                return {"success": False, "error": "Email already exists"}
+
+        # Create the admin user
+        admin_data = {
+            "id": str(uuid.uuid4()),
+            "username": username,
+            "email": email,
+            "password_hash": hash_password(password),
+            "role": "tenant_admin",
+            "tenant_id": tenant_id,
+            "is_active": True,
+        }
+
+        resp = await client.post(
+            f"{_url()}/rest/v1/admin_users",
+            headers={**_headers(), "Prefer": "return=representation"},
+            json=admin_data,
+        )
+
+        if resp.status_code == 201:
+            created = resp.json()[0]
+            # Set default permissions
+            default_perms = ["view_timesheets", "view_voice_notes", "view_reports"]
+            for perm in default_perms:
+                await client.post(
+                    f"{_url()}/rest/v1/admin_user_permissions",
+                    headers={**_headers(), "Prefer": "return=minimal"},
+                    json={
+                        "id": str(uuid.uuid4()),
+                        "admin_user_id": created["id"],
+                        "permission_type": perm,
+                    },
+                )
+
+            logger.info("Created tenant admin %s for tenant %s", username, tenant_id)
+            return {
+                "success": True,
+                "admin": {
+                    "id": created["id"],
+                    "username": created["username"],
+                    "email": created["email"],
+                    "role": created["role"],
+                    "is_active": created["is_active"],
+                    "created_at": created.get("created_at"),
+                    "permissions": default_perms,
+                },
+            }
+        else:
+            logger.error("Failed to create admin: %s", resp.text)
+            return {"success": False, "error": "Failed to create admin user"}
+
+
+@router.post("/admin/tenants/{tenant_id}/admins/{admin_id}/toggle")
+async def toggle_tenant_admin(tenant_id: str, admin_id: str, request: Request):
+    """Toggle a tenant admin's active status. Super admin only."""
+    user_session = await _get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        return {"success": False, "error": "Super admin access required"}
+
+    async with httpx.AsyncClient() as client:
+        # Verify admin belongs to this tenant
+        check = await client.get(
+            f"{_url()}/rest/v1/admin_users",
+            headers=_headers(),
+            params={"id": f"eq.{admin_id}", "tenant_id": f"eq.{tenant_id}", "select": "id,is_active,username"},
+        )
+        if check.status_code != 200 or not check.json():
+            return {"success": False, "error": "Admin user not found"}
+
+        admin = check.json()[0]
+        new_status = not admin["is_active"]
+
+        resp = await client.patch(
+            f"{_url()}/rest/v1/admin_users",
+            headers={**_headers(), "Prefer": "return=minimal"},
+            params={"id": f"eq.{admin_id}"},
+            json={"is_active": new_status},
+        )
+
+        if resp.status_code in (200, 204):
+            logger.info("Toggled admin %s active=%s", admin["username"], new_status)
+            return {"success": True, "is_active": new_status}
+        else:
+            return {"success": False, "error": "Failed to update"}
+
+
+@router.post("/admin/tenants/{tenant_id}/admins/{admin_id}/reset-password")
+async def reset_admin_password(tenant_id: str, admin_id: str, request: Request):
+    """Reset a tenant admin's password. Super admin only."""
+    user_session = await _get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        return {"success": False, "error": "Super admin access required"}
+
+    body = await request.json()
+    new_password = body.get("password", "")
+
+    if not new_password:
+        return {"success": False, "error": "Password is required"}
+
+    validation = validate_password_strength(new_password)
+    if not validation["valid"]:
+        return {"success": False, "error": "Password does not meet requirements"}
+
+    async with httpx.AsyncClient() as client:
+        # Verify admin belongs to this tenant
+        check = await client.get(
+            f"{_url()}/rest/v1/admin_users",
+            headers=_headers(),
+            params={"id": f"eq.{admin_id}", "tenant_id": f"eq.{tenant_id}", "select": "id,username"},
+        )
+        if check.status_code != 200 or not check.json():
+            return {"success": False, "error": "Admin user not found"}
+
+        resp = await client.patch(
+            f"{_url()}/rest/v1/admin_users",
+            headers={**_headers(), "Prefer": "return=minimal"},
+            params={"id": f"eq.{admin_id}"},
+            json={"password_hash": hash_password(new_password)},
+        )
+
+        if resp.status_code in (200, 204):
+            logger.info("Reset password for admin %s", check.json()[0]["username"])
+            return {"success": True}
+        else:
+            return {"success": False, "error": "Failed to reset password"}

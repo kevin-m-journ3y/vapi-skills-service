@@ -208,6 +208,143 @@
                             </div>
                         </div>
 
+                        <!-- Admin Access -->
+                        <div>
+                            <div class="divider"></div>
+                            <div class="cursor-pointer select-none"
+                                 @click="toggleAdminPanel(tenant.id)">
+                                <div class="flex justify-between items-center">
+                                    <h3 class="font-semibold text-lg">Admin Access</h3>
+                                    <div class="flex items-center gap-2">
+                                        <span class="badge badge-ghost"
+                                              x-text="(tenantAdmins[tenant.id]?.length || 0) + ' admin' + ((tenantAdmins[tenant.id]?.length || 0) !== 1 ? 's' : '')"></span>
+                                        <svg xmlns="http://www.w3.org/2000/svg"
+                                             class="h-5 w-5 transition-transform duration-200"
+                                             :class="{'rotate-180': adminExpanded[tenant.id]}"
+                                             fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                                        </svg>
+                                    </div>
+                                </div>
+                                <p class="text-sm text-base-content/50 mt-1">Manage who can log in to this admin dashboard</p>
+                            </div>
+
+                            <div x-show="adminExpanded[tenant.id]" x-transition x-cloak class="mt-4">
+                                <!-- Loading -->
+                                <div x-show="loadingAdmins[tenant.id]" class="flex justify-center py-6">
+                                    <span class="loading loading-spinner loading-md"></span>
+                                </div>
+
+                                <div x-show="!loadingAdmins[tenant.id]" class="space-y-4">
+                                    <!-- Existing admins table -->
+                                    <div class="overflow-x-auto" x-show="tenantAdmins[tenant.id]?.length > 0">
+                                        <table class="table table-sm">
+                                            <thead>
+                                                <tr>
+                                                    <th>Username</th>
+                                                    <th>Email</th>
+                                                    <th>Last Login</th>
+                                                    <th>Status</th>
+                                                    <template x-if="isSuperAdmin"><th>Actions</th></template>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <template x-for="admin in tenantAdmins[tenant.id]" :key="admin.id">
+                                                    <tr>
+                                                        <td x-text="admin.username"></td>
+                                                        <td class="text-sm text-base-content/70" x-text="admin.email"></td>
+                                                        <td class="text-sm text-base-content/50"
+                                                            x-text="admin.last_login_at ? new Date(admin.last_login_at).toLocaleDateString('en-AU', {day:'2-digit',month:'short',year:'numeric'}) : 'Never'"></td>
+                                                        <td>
+                                                            <span class="badge badge-sm"
+                                                                  :class="admin.is_active ? 'badge-success' : 'badge-error'"
+                                                                  x-text="admin.is_active ? 'Active' : 'Disabled'"></span>
+                                                        </td>
+                                                        <template x-if="isSuperAdmin">
+                                                            <td class="space-x-1">
+                                                                <button class="btn btn-ghost btn-xs"
+                                                                        @click="toggleAdminActive(tenant.id, admin.id, admin.is_active)"
+                                                                        x-text="admin.is_active ? 'Disable' : 'Enable'"></button>
+                                                                <button class="btn btn-ghost btn-xs"
+                                                                        @click="showResetPassword(tenant.id, admin.id, admin.username)">
+                                                                    Reset Password
+                                                                </button>
+                                                            </td>
+                                                        </template>
+                                                    </tr>
+                                                </template>
+                                            </tbody>
+                                        </table>
+                                    </div>
+
+                                    <div x-show="!tenantAdmins[tenant.id]?.length && !loadingAdmins[tenant.id]"
+                                         class="text-center py-4 text-base-content/50">
+                                        No admin users configured for this company.
+                                    </div>
+
+                                    <!-- Add Admin Form (super admin only) -->
+                                    <template x-if="isSuperAdmin">
+                                        <div>
+                                            <button class="btn btn-outline btn-sm"
+                                                    x-show="!showAddAdmin[tenant.id]"
+                                                    @click="showAddAdmin[tenant.id] = true">
+                                                + Add Admin
+                                            </button>
+
+                                            <div x-show="showAddAdmin[tenant.id]" x-transition class="border border-base-300 rounded-lg p-4 mt-2">
+                                                <h4 class="font-medium mb-3">New Admin Account</h4>
+                                                <div class="grid grid-cols-1 md:grid-cols-3 gap-3 max-w-3xl">
+                                                    <div class="form-control">
+                                                        <label class="label py-1"><span class="label-text text-xs">Username</span></label>
+                                                        <input type="text" class="input input-bordered input-sm" placeholder="jake.breen"
+                                                               x-model="newAdmin[tenant.id].username" />
+                                                    </div>
+                                                    <div class="form-control">
+                                                        <label class="label py-1"><span class="label-text text-xs">Email</span></label>
+                                                        <input type="email" class="input input-bordered input-sm" placeholder="jake@company.com"
+                                                               x-model="newAdmin[tenant.id].email" />
+                                                    </div>
+                                                    <div class="form-control">
+                                                        <label class="label py-1"><span class="label-text text-xs">Temporary Password</span></label>
+                                                        <input type="text" class="input input-bordered input-sm" placeholder="Min 8 chars, mixed case + number + special"
+                                                               x-model="newAdmin[tenant.id].password" />
+                                                    </div>
+                                                </div>
+                                                <div class="flex gap-2 mt-3">
+                                                    <button class="btn btn-primary btn-sm" @click="createAdmin(tenant.id)"
+                                                            :disabled="creatingAdmin[tenant.id]">
+                                                        <span x-show="!creatingAdmin[tenant.id]">Create Admin</span>
+                                                        <span x-show="creatingAdmin[tenant.id]" class="loading loading-spinner loading-sm"></span>
+                                                    </button>
+                                                    <button class="btn btn-ghost btn-sm" @click="showAddAdmin[tenant.id] = false">Cancel</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </template>
+
+                                    <!-- Reset Password Modal -->
+                                    <template x-if="isSuperAdmin">
+                                        <div x-show="resetPasswordModal.tenantId === tenant.id" x-transition x-cloak
+                                             class="border border-base-300 rounded-lg p-4 bg-base-200/50">
+                                            <h4 class="font-medium mb-2">Reset Password for <span class="text-primary" x-text="resetPasswordModal.username"></span></h4>
+                                            <div class="form-control max-w-sm">
+                                                <input type="text" class="input input-bordered input-sm" placeholder="New password"
+                                                       x-model="resetPasswordModal.password" />
+                                            </div>
+                                            <div class="flex gap-2 mt-3">
+                                                <button class="btn btn-warning btn-sm" @click="resetPassword()"
+                                                        :disabled="resetPasswordModal.saving">
+                                                    <span x-show="!resetPasswordModal.saving">Reset Password</span>
+                                                    <span x-show="resetPasswordModal.saving" class="loading loading-spinner loading-sm"></span>
+                                                </button>
+                                                <button class="btn btn-ghost btn-sm" @click="resetPasswordModal = {tenantId:null,adminId:null,username:'',password:'',saving:false}">Cancel</button>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Skills Configuration (Super Admin Only) -->
                         <template x-if="isSuperAdmin">
                             <div>
@@ -289,6 +426,15 @@ function settingsPage() {
         phoneExpanded: {},
         savingPhone: {},
 
+        // Admin Access
+        tenantAdmins: {},
+        adminExpanded: {},
+        loadingAdmins: {},
+        showAddAdmin: {},
+        creatingAdmin: {},
+        newAdmin: {},
+        resetPasswordModal: { tenantId: null, adminId: null, username: '', password: '', saving: false },
+
         toast: { show: false, message: '', type: 'success' },
 
         showToast(message, type = 'success') {
@@ -340,6 +486,11 @@ function settingsPage() {
                             this.savingQr[t.id] = false;
                             this.phoneExpanded[t.id] = false;
                             this.savingPhone[t.id] = false;
+                            this.adminExpanded[t.id] = false;
+                            this.loadingAdmins[t.id] = false;
+                            this.showAddAdmin[t.id] = false;
+                            this.creatingAdmin[t.id] = false;
+                            this.newAdmin[t.id] = { username: '', email: '', password: '' };
                         }
                     } else {
                         this.error = data.error || 'Failed to load settings';
@@ -467,6 +618,113 @@ function settingsPage() {
             this.skillsExpanded[tenantId] = !this.skillsExpanded[tenantId];
             if (this.skillsExpanded[tenantId] && !this.tenantSkills[tenantId]) {
                 this.loadTenantSkills(tenantId);
+            }
+        },
+
+        // --- Admin Access ---
+        async toggleAdminPanel(tenantId) {
+            this.adminExpanded[tenantId] = !this.adminExpanded[tenantId];
+            if (this.adminExpanded[tenantId] && !this.tenantAdmins[tenantId]) {
+                await this.loadTenantAdmins(tenantId);
+            }
+        },
+
+        async loadTenantAdmins(tenantId) {
+            this.loadingAdmins[tenantId] = true;
+            try {
+                const resp = await fetch(`/admin/tenants/${tenantId}/admins`, { credentials: 'same-origin' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.success) {
+                        this.tenantAdmins[tenantId] = data.admins;
+                    }
+                }
+            } catch (err) {
+                this.showToast('Failed to load admins', 'error');
+            } finally {
+                this.loadingAdmins[tenantId] = false;
+            }
+        },
+
+        async createAdmin(tenantId) {
+            const admin = this.newAdmin[tenantId];
+            if (!admin.username || !admin.email || !admin.password) {
+                this.showToast('All fields are required', 'error');
+                return;
+            }
+            this.creatingAdmin[tenantId] = true;
+            try {
+                const resp = await fetch(`/admin/tenants/${tenantId}/admins`, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(admin),
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    if (!this.tenantAdmins[tenantId]) this.tenantAdmins[tenantId] = [];
+                    this.tenantAdmins[tenantId].push(data.admin);
+                    this.newAdmin[tenantId] = { username: '', email: '', password: '' };
+                    this.showAddAdmin[tenantId] = false;
+                    this.showToast(`Admin ${data.admin.username} created`);
+                } else {
+                    this.showToast(data.error || 'Failed to create admin', 'error');
+                }
+            } catch (err) {
+                this.showToast('Failed to create admin', 'error');
+            } finally {
+                this.creatingAdmin[tenantId] = false;
+            }
+        },
+
+        async toggleAdminActive(tenantId, adminId, currentStatus) {
+            const action = currentStatus ? 'disable' : 'enable';
+            if (!confirm(`Are you sure you want to ${action} this admin?`)) return;
+
+            try {
+                const resp = await fetch(`/admin/tenants/${tenantId}/admins/${adminId}/toggle`, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    const admin = this.tenantAdmins[tenantId].find(a => a.id === adminId);
+                    if (admin) admin.is_active = data.is_active;
+                    this.showToast(`Admin ${data.is_active ? 'enabled' : 'disabled'}`);
+                } else {
+                    this.showToast(data.error || 'Failed to update', 'error');
+                }
+            } catch (err) {
+                this.showToast('Failed to update', 'error');
+            }
+        },
+
+        showResetPassword(tenantId, adminId, username) {
+            this.resetPasswordModal = { tenantId, adminId, username, password: '', saving: false };
+        },
+
+        async resetPassword() {
+            const m = this.resetPasswordModal;
+            if (!m.password) { this.showToast('Enter a new password', 'error'); return; }
+            m.saving = true;
+            try {
+                const resp = await fetch(`/admin/tenants/${m.tenantId}/admins/${m.adminId}/reset-password`, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: m.password }),
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.showToast(`Password reset for ${m.username}`);
+                    this.resetPasswordModal = { tenantId: null, adminId: null, username: '', password: '', saving: false };
+                } else {
+                    this.showToast(data.error || 'Failed to reset password', 'error');
+                }
+            } catch (err) {
+                this.showToast('Failed to reset password', 'error');
+            } finally {
+                m.saving = false;
             }
         },
 

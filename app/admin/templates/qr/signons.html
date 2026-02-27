@@ -24,7 +24,7 @@
     <!-- Tenant Switcher -->
     <template x-if="currentUser?.role === 'super_admin'">
         <div class="mb-4">
-            <select class="select select-bordered w-full max-w-xs" x-model="selectedTenantId" @change="loadData()">
+            <select class="select select-bordered w-full max-w-xs" x-model="selectedTenantId" @change="selectedUserId = ''; loadUsers(); loadData()">
                 <option value="">Select Tenant</option>
                 <template x-for="t in tenants" :key="t.id">
                     <option :value="t.id" x-text="t.name"></option>
@@ -44,6 +44,15 @@
                 <div class="form-control">
                     <label class="label label-text text-xs">To</label>
                     <input type="date" class="input input-bordered input-sm" x-model="dateTo" @change="loadData()" />
+                </div>
+                <div class="form-control">
+                    <label class="label label-text text-xs">Person</label>
+                    <select class="select select-bordered select-sm w-44" x-model="selectedUserId" @change="loadData()">
+                        <option value="">All Users</option>
+                        <template x-for="u in users" :key="u.id">
+                            <option :value="u.id" x-text="u.name"></option>
+                        </template>
+                    </select>
                 </div>
                 <div class="flex gap-1">
                     <button class="btn btn-xs" @click="setPreset('today')">Today</button>
@@ -78,7 +87,7 @@
             </div>
 
             <div x-show="!loading" class="overflow-x-auto">
-                <table class="table table-zebra">
+                <table id="signons-table" class="table table-zebra">
                     <thead>
                         <tr>
                             <th>User</th>
@@ -95,30 +104,47 @@
                             <tr>
                                 <td x-text="s.user_name"></td>
                                 <td x-text="s.site_name"></td>
-                                <td class="cursor-pointer hover:bg-base-200 rounded" @click="editTime(idx, 'signed_on_at')">
-                                    <template x-if="editing?.id !== s.id || editing?.field !== 'signed_on_at'">
-                                        <span x-text="formatDateTime(s.signed_on_at)" class="border-b border-dashed border-base-content/30"></span>
-                                    </template>
-                                    <template x-if="editing?.id === s.id && editing?.field === 'signed_on_at'">
+                                <td>
+                                    <div x-show="!isEditing(s.id, 'signed_on_at')" class="flex items-center gap-1">
+                                        <span x-text="formatDateTime(s.signed_on_at)"></span>
+                                        <button class="btn btn-ghost btn-xs px-1 opacity-40 hover:opacity-100" @click.stop="editTime(idx, 'signed_on_at')" title="Edit time">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                        </button>
+                                    </div>
+                                    <div x-show="isEditing(s.id, 'signed_on_at')" class="flex flex-col gap-1" x-cloak>
                                         <input type="datetime-local" class="input input-bordered input-xs w-44"
                                                :value="toLocalInput(s.signed_on_at)"
-                                               @change="saveTime(idx, 'signed_on_at', $event.target.value)"
-                                               @keyup.escape="editing = null"
-                                               @blur="editing = null"
-                                               x-ref="timeInput" />
-                                    </template>
+                                               @keyup.escape="editingId = null"
+                                               @keyup.enter="saveTime(idx, 'signed_on_at', $event.target.value)" />
+                                        <div class="flex gap-1">
+                                            <button class="btn btn-success btn-xs gap-1" @click="saveTime(idx, 'signed_on_at', $el.closest('td').querySelector('input').value)">
+                                                <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+                                                Save
+                                            </button>
+                                            <button class="btn btn-ghost btn-xs" @click="editingId = null">Cancel</button>
+                                        </div>
+                                    </div>
                                 </td>
-                                <td class="cursor-pointer hover:bg-base-200 rounded" @click="editTime(idx, 'signed_off_at')">
-                                    <template x-if="editing?.id !== s.id || editing?.field !== 'signed_off_at'">
-                                        <span x-text="s.signed_off_at ? formatDateTime(s.signed_off_at) : '-'" class="border-b border-dashed border-base-content/30"></span>
-                                    </template>
-                                    <template x-if="editing?.id === s.id && editing?.field === 'signed_off_at'">
+                                <td>
+                                    <div x-show="!isEditing(s.id, 'signed_off_at')" class="flex items-center gap-1">
+                                        <span x-text="s.signed_off_at ? formatDateTime(s.signed_off_at) : '-'"></span>
+                                        <button class="btn btn-ghost btn-xs px-1 opacity-40 hover:opacity-100" @click.stop="editTime(idx, 'signed_off_at')" title="Edit time">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                        </button>
+                                    </div>
+                                    <div x-show="isEditing(s.id, 'signed_off_at')" class="flex flex-col gap-1" x-cloak>
                                         <input type="datetime-local" class="input input-bordered input-xs w-44"
                                                :value="toLocalInput(s.signed_off_at)"
-                                               @change="saveTime(idx, 'signed_off_at', $event.target.value)"
-                                               @keyup.escape="editing = null"
-                                               @blur="editing = null" />
-                                    </template>
+                                               @keyup.escape="editingId = null"
+                                               @keyup.enter="saveTime(idx, 'signed_off_at', $event.target.value)" />
+                                        <div class="flex gap-1">
+                                            <button class="btn btn-success btn-xs gap-1" @click="saveTime(idx, 'signed_off_at', $el.closest('td').querySelector('input').value)">
+                                                <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+                                                Save
+                                            </button>
+                                            <button class="btn btn-ghost btn-xs" @click="editingId = null">Cancel</button>
+                                        </div>
+                                    </div>
                                 </td>
                                 <td x-text="calcDuration(s)"></td>
                                 <td>
@@ -147,9 +173,12 @@ function signonsReport() {
         selectedTenantId: '',
         tenants: [],
         signons: [],
+        users: [],
+        selectedUserId: '',
         stats: {},
         loading: false,
-        editing: null,
+        editingId: null,
+        editingField: null,
         toast: { show: false, message: '', type: 'success' },
         dateFrom: new Date().toISOString().split('T')[0],
         dateTo: new Date().toISOString().split('T')[0],
@@ -164,7 +193,7 @@ function signonsReport() {
                 await this.loadTenants();
             } else {
                 this.selectedTenantId = this.currentUser.tenant_id;
-                await this.loadData();
+                await Promise.all([this.loadUsers(), this.loadData()]);
             }
         },
 
@@ -193,6 +222,17 @@ function signonsReport() {
             this.loadData();
         },
 
+        async loadUsers() {
+            if (!this.selectedTenantId) { this.users = []; return; }
+            const resp = await fetch(`/admin/users/data?tenant_id=${this.selectedTenantId}`, { credentials: 'same-origin' });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.success) {
+                    this.users = (data.users || []).sort((a, b) => a.name.localeCompare(b.name));
+                }
+            }
+        },
+
         async loadData() {
             if (!this.selectedTenantId) return;
             this.loading = true;
@@ -202,6 +242,7 @@ function signonsReport() {
                     date_from: this.dateFrom,
                     date_to: this.dateTo,
                 });
+                if (this.selectedUserId) params.set('user_id', this.selectedUserId);
                 const resp = await fetch(`/admin/qr-signons/data?${params}`, { credentials: 'same-origin' });
                 if (resp.ok) {
                     const data = await resp.json();
@@ -236,12 +277,24 @@ function signonsReport() {
             setTimeout(() => { this.toast.show = false; }, 3000);
         },
 
+        isEditing(id, field) {
+            return this.editingId === id && this.editingField === field;
+        },
+
         editTime(idx, field) {
             const s = this.signons[idx];
-            this.editing = { id: s.id, idx, field };
+            this.editingId = s.id;
+            this.editingField = field;
             this.$nextTick(() => {
-                const input = this.$el.querySelector('input[type="datetime-local"]');
-                if (input) input.focus();
+                setTimeout(() => {
+                    const rows = document.querySelectorAll('#signons-table tbody tr');
+                    const row = rows[idx];
+                    const input = row ? row.querySelector('input[type="datetime-local"]') : null;
+                    if (input) {
+                        input.focus();
+                        try { input.showPicker(); } catch (e) {}
+                    }
+                }, 50);
             });
         },
 
@@ -254,7 +307,8 @@ function signonsReport() {
         },
 
         async saveTime(idx, field, value) {
-            this.editing = null;
+            this.editingId = null;
+            this.editingField = null;
             if (!value) return;
 
             const s = this.signons[idx];
