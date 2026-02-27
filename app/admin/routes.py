@@ -137,15 +137,18 @@ async def login_page(request: Request):
 # ============================================
 
 @router.get("/admin", response_class=HTMLResponse)
-async def admin_dashboard(request: Request):
+async def admin_dashboard(request: Request, theme: Optional[str] = None):
     """Main admin dashboard - redirects to login if not authenticated"""
     # Check if authenticated
     user_session = request.session.get("user")
     if not user_session:
         return RedirectResponse(url="/admin/login", status_code=302)
 
+    # Choose template based on theme parameter
+    template = "dashboard/index-modern.html" if theme == "modern" else "dashboard/index.html"
+
     return templates.TemplateResponse(
-        "dashboard/index.html",
+        template,
         {"request": request, "page_title": "Admin Dashboard"}
     )
 
@@ -276,10 +279,18 @@ async def get_dashboard_stats(request: Request):
 # ============================================
 
 @router.get("/admin/tenants", response_class=HTMLResponse)
-async def list_tenants_page(request: Request):
+async def list_tenants_page(request: Request, theme: Optional[str] = None):
     """Tenants management page"""
+    # Check if authenticated
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    # Choose template based on theme parameter
+    template = "tenants/list-modern.html" if theme == "modern" else "tenants/list.html"
+
     return templates.TemplateResponse(
-        "tenants/list.html",
+        template,
         {"request": request, "page_title": "Tenant Management"}
     )
 
@@ -315,6 +326,23 @@ async def get_tenants_data(request: Request):
 
             if response.status_code == 200:
                 tenants = response.json()
+
+                # Enrich each tenant with enabled skills count
+                for tenant in tenants:
+                    skills_count_resp = await client.get(
+                        f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_skills",
+                        headers={
+                            "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                            "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                        },
+                        params={
+                            "tenant_id": f"eq.{tenant['id']}",
+                            "is_enabled": "eq.true",
+                            "select": "id"
+                        }
+                    )
+                    tenant["enabled_skills_count"] = len(skills_count_resp.json()) if skills_count_resp.status_code == 200 else 0
+
                 return {
                     "success": True,
                     "tenants": tenants,
@@ -328,14 +356,208 @@ async def get_tenants_data(request: Request):
         return {"success": False, "error": str(e)}
 
 # ============================================
+# TENANT SKILL MANAGEMENT
+# ============================================
+
+@router.get("/admin/tenants/{tenant_id}/skills")
+async def get_tenant_skills(tenant_id: str, request: Request):
+    """Get all skills with their enabled/disabled status for a tenant (super admin only)"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        return {"success": False, "error": "Super admin access required"}
+
+    try:
+        async with httpx.AsyncClient() as client:
+            # Get ALL global skills
+            all_skills_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/skills",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={"select": "id,skill_key,name,description", "order": "name.asc"}
+            )
+
+            # Get this tenant's enabled skills
+            tenant_skills_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_skills",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={
+                    "tenant_id": f"eq.{tenant_id}",
+                    "is_enabled": "eq.true",
+                    "select": "skill_id"
+                }
+            )
+
+            if all_skills_resp.status_code == 200 and tenant_skills_resp.status_code == 200:
+                all_skills = all_skills_resp.json()
+                enabled_ids = {ts["skill_id"] for ts in tenant_skills_resp.json()}
+
+                for skill in all_skills:
+                    skill["is_enabled"] = skill["id"] in enabled_ids
+
+                return {"success": True, "skills": all_skills}
+            else:
+                return {"success": False, "error": "Failed to fetch skills"}
+
+    except Exception as e:
+        logger.error(f"Error fetching tenant skills: {e}")
+        return {"success": False, "error": str(e)}
+
+@router.post("/admin/tenants/{tenant_id}/skills/{skill_id}/toggle")
+async def toggle_tenant_skill(tenant_id: str, skill_id: str, request: Request):
+    """Enable or disable a skill for a tenant (super admin only)"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        return {"success": False, "error": "Super admin access required"}
+
+    try:
+        async with httpx.AsyncClient() as client:
+            # Check if tenant_skills record exists
+            check_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_skills",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={
+                    "tenant_id": f"eq.{tenant_id}",
+                    "skill_id": f"eq.{skill_id}"
+                }
+            )
+
+            if check_resp.status_code == 200 and check_resp.json():
+                # Record exists - toggle is_enabled
+                current = check_resp.json()[0]
+                new_status = not current["is_enabled"]
+
+                update_resp = await client.patch(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_skills",
+                    headers={
+                        "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                        "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=minimal"
+                    },
+                    params={
+                        "tenant_id": f"eq.{tenant_id}",
+                        "skill_id": f"eq.{skill_id}"
+                    },
+                    json={"is_enabled": new_status}
+                )
+
+                if update_resp.status_code in [200, 204]:
+                    return {"success": True, "is_enabled": new_status}
+                else:
+                    return {"success": False, "error": "Failed to update skill status"}
+            else:
+                # Record doesn't exist - create as enabled
+                import uuid
+                create_resp = await client.post(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_skills",
+                    headers={
+                        "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                        "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=minimal"
+                    },
+                    json={
+                        "id": str(uuid.uuid4()),
+                        "tenant_id": tenant_id,
+                        "skill_id": skill_id,
+                        "is_enabled": True
+                    }
+                )
+
+                if create_resp.status_code in [200, 201]:
+                    return {"success": True, "is_enabled": True}
+                else:
+                    return {"success": False, "error": "Failed to create tenant skill"}
+
+    except Exception as e:
+        logger.error(f"Error toggling tenant skill: {e}")
+        return {"success": False, "error": str(e)}
+
+@router.get("/admin/tenants/{tenant_id}/skills/{skill_id}/affected-users")
+async def get_affected_users(tenant_id: str, skill_id: str, request: Request):
+    """Get users who currently have this skill assigned (for confirmation before disable)"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        return {"success": False, "error": "Super admin access required"}
+
+    try:
+        async with httpx.AsyncClient() as client:
+            # Get users in this tenant
+            users_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/users",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={
+                    "tenant_id": f"eq.{tenant_id}",
+                    "select": "id,name"
+                }
+            )
+
+            if users_resp.status_code != 200:
+                return {"success": False, "error": "Failed to fetch users"}
+
+            tenant_users = users_resp.json()
+            if not tenant_users:
+                return {"success": True, "affected_users": [], "count": 0}
+
+            user_ids = [u["id"] for u in tenant_users]
+            user_name_map = {u["id"]: u["name"] for u in tenant_users}
+
+            # Get user_skills for these users with this skill
+            user_skills_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/user_skills",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={
+                    "user_id": f"in.({','.join(user_ids)})",
+                    "skill_id": f"eq.{skill_id}",
+                    "is_enabled": "eq.true",
+                    "select": "user_id"
+                }
+            )
+
+            if user_skills_resp.status_code == 200:
+                affected = [
+                    {"id": us["user_id"], "name": user_name_map.get(us["user_id"], "Unknown")}
+                    for us in user_skills_resp.json()
+                ]
+                return {"success": True, "affected_users": affected, "count": len(affected)}
+            else:
+                return {"success": False, "error": "Failed to fetch user skills"}
+
+    except Exception as e:
+        logger.error(f"Error fetching affected users: {e}")
+        return {"success": False, "error": str(e)}
+
+# ============================================
 # USER MANAGEMENT
 # ============================================
 
 @router.get("/admin/users", response_class=HTMLResponse)
-async def list_users_page(request: Request):
+async def list_users_page(request: Request, theme: Optional[str] = None):
     """Users management page"""
+    # Check if authenticated
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    # Choose template based on theme parameter
+    template = "users/list-modern.html" if theme == "modern" else "users/list.html"
+
     return templates.TemplateResponse(
-        "users/list.html",
+        template,
         {"request": request, "page_title": "User Management"}
     )
 
@@ -577,27 +799,41 @@ async def get_available_skills_for_user(
     user_id: str,
     request: Request
 ):
-    """Get all available skills that user doesn't have yet"""
+    """Get available skills that are enabled for the user's tenant and not yet assigned"""
     user_session = await get_session_user(request)
     try:
         async with httpx.AsyncClient() as client:
-            # Get all skills from system
-            all_skills_response = await client.get(
-                f"{os.getenv('SUPABASE_URL')}/rest/v1/skills",
-                headers={
-                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
-                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
-                },
-                params={"select": "id,skill_key,name"}
+            headers = {
+                "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            # Get user's tenant_id
+            user_response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/users",
+                headers=headers,
+                params={"id": f"eq.{user_id}", "select": "tenant_id"}
+            )
+            if user_response.status_code != 200 or not user_response.json():
+                return {"success": False, "error": "User not found"}
+
+            user_tenant_id = user_response.json()[0]["tenant_id"]
+
+            # Get skills enabled for this tenant (via tenant_skills join)
+            tenant_skills_response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_skills",
+                headers=headers,
+                params={
+                    "tenant_id": f"eq.{user_tenant_id}",
+                    "is_enabled": "eq.true",
+                    "select": "skills(id,skill_key,name)"
+                }
             )
 
             # Get user's current skills
             user_skills_response = await client.get(
                 f"{os.getenv('SUPABASE_URL')}/rest/v1/user_skills",
-                headers={
-                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
-                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
-                },
+                headers=headers,
                 params={
                     "user_id": f"eq.{user_id}",
                     "is_enabled": "eq.true",
@@ -605,12 +841,12 @@ async def get_available_skills_for_user(
                 }
             )
 
-            if all_skills_response.status_code == 200 and user_skills_response.status_code == 200:
-                all_skills = all_skills_response.json()
+            if tenant_skills_response.status_code == 200 and user_skills_response.status_code == 200:
+                tenant_skills = [ts["skills"] for ts in tenant_skills_response.json() if ts.get("skills")]
                 user_skill_ids = {s["skill_id"] for s in user_skills_response.json()}
 
                 # Filter out skills user already has
-                available = [s for s in all_skills if s["id"] not in user_skill_ids]
+                available = [s for s in tenant_skills if s["id"] not in user_skill_ids]
 
                 return {"success": True, "skills": available}
             else:
@@ -626,10 +862,38 @@ async def add_skill_to_user(
     skill_id: str,
     request: Request
 ):
-    """Add a skill to a user"""
+    """Add a skill to a user (validates skill is enabled for user's tenant)"""
     user_session = await get_session_user(request)
     try:
         async with httpx.AsyncClient() as client:
+            headers = {
+                "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            # Validate: skill must be enabled for the user's tenant
+            user_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/users",
+                headers=headers,
+                params={"id": f"eq.{user_id}", "select": "tenant_id"}
+            )
+            if user_resp.status_code != 200 or not user_resp.json():
+                return {"success": False, "error": "User not found"}
+
+            user_tenant_id = user_resp.json()[0]["tenant_id"]
+
+            ts_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_skills",
+                headers=headers,
+                params={
+                    "tenant_id": f"eq.{user_tenant_id}",
+                    "skill_id": f"eq.{skill_id}",
+                    "is_enabled": "eq.true"
+                }
+            )
+            if ts_resp.status_code != 200 or not ts_resp.json():
+                return {"success": False, "error": "This skill is not enabled for this tenant"}
+
             # Check if relationship already exists (might be disabled)
             check_response = await client.get(
                 f"{os.getenv('SUPABASE_URL')}/rest/v1/user_skills",
@@ -913,10 +1177,18 @@ async def get_sites_data(request: Request):
 # ============================================
 
 @router.get("/admin/reports/timesheets", response_class=HTMLResponse)
-async def timesheets_report_page(request: Request):
+async def timesheets_report_page(request: Request, theme: Optional[str] = None):
     """Timesheets report page"""
+    # Check if authenticated
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    # Choose template based on theme parameter
+    template = "reports/timesheets-modern.html" if theme == "modern" else "reports/timesheets.html"
+
     return templates.TemplateResponse(
-        "reports/timesheets.html",
+        template,
         {"request": request, "page_title": "Timesheet Reports"}
     )
 
@@ -1249,9 +1521,17 @@ async def get_timesheets_by_site(
         return {"success": False, "error": str(e)}
 
 @router.get("/admin/reports/voice-notes", response_class=HTMLResponse)
-async def voice_notes_report_page(request: Request):
+async def voice_notes_report_page(request: Request, theme: Optional[str] = None):
     """Voice notes report page"""
+    # Check if authenticated
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    # Choose template based on theme parameter
+    template = "reports/voice_notes-modern.html" if theme == "modern" else "reports/voice_notes.html"
+
     return templates.TemplateResponse(
-        "reports/voice_notes.html",
+        template,
         {"request": request, "page_title": "Voice Notes Reports"}
     )

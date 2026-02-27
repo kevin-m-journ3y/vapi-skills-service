@@ -481,6 +481,8 @@ function userManagement() {
             } else {
                 localStorage.removeItem('selected_tenant_id');
             }
+            // Clear skills cache (different tenants have different available skills)
+            this.availableSkillsForUser = {};
             // Reload users with new tenant filter
             this.loadUsers();
         },

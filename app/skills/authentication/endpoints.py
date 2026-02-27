@@ -150,7 +150,7 @@ async def authenticate_by_phone(request: dict):
 
             # Note: Log will be updated after we fetch skills and sites
 
-            # Get skills
+            # Get user's assigned skills
             skills_response = await client.get(
                 f"{settings.SUPABASE_URL}/rest/v1/user_skills",
                 headers={
@@ -160,20 +160,40 @@ async def authenticate_by_phone(request: dict):
                 params={
                     "user_id": f"eq.{user['id']}",
                     "is_enabled": "eq.true",
-                    "select": "skills(skill_key,name,description,vapi_assistant_id)"
+                    "select": "skills(id,skill_key,name,description,vapi_assistant_id)"
                 }
             )
+
+            # Get tenant-enabled skills to filter against
+            tenant_skills_response = await client.get(
+                f"{settings.SUPABASE_URL}/rest/v1/tenant_skills",
+                headers={
+                    "apikey": settings.SUPABASE_SERVICE_KEY,
+                    "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}"
+                },
+                params={
+                    "tenant_id": f"eq.{user['tenant_id']}",
+                    "is_enabled": "eq.true",
+                    "select": "skill_id"
+                }
+            )
+
+            tenant_enabled_skill_ids = set()
+            if tenant_skills_response.status_code == 200 and tenant_skills_response.json():
+                tenant_enabled_skill_ids = {ts["skill_id"] for ts in tenant_skills_response.json()}
 
             user_skills = skills_response.json() if skills_response.status_code == 200 else []
             available_skills = []
             for user_skill in user_skills:
                 skill = user_skill.get('skills', {})
-                available_skills.append({
-                    "skill_key": skill.get('skill_key'),
-                    "skill_name": skill.get('name'),
-                    "skill_description": skill.get('description', skill.get('name')),
-                    "vapi_assistant_id": skill.get('vapi_assistant_id')
-                })
+                # Only include if tenant-enabled (or if no tenant_skills configured yet for backward compat)
+                if not tenant_enabled_skill_ids or skill.get('id') in tenant_enabled_skill_ids:
+                    available_skills.append({
+                        "skill_key": skill.get('skill_key'),
+                        "skill_name": skill.get('name'),
+                        "skill_description": skill.get('description', skill.get('name')),
+                        "vapi_assistant_id": skill.get('vapi_assistant_id')
+                    })
 
             # Get tenant timezone
             tenant_response = await client.get(
