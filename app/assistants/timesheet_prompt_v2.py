@@ -56,7 +56,7 @@ IF signon_count >= 1 (user scanned QR at a site today):
     → Use the site_id from the sign-on (SKIP site identification step entirely)
     → Use signed_on_time as the suggested start time
     → If user confirms the time, use it; if they say a different time, use theirs
-    → Continue to collect: end time → work description → tomorrow's plans → save
+    → Continue to collect: end time → work description → anything to report → save
 
   IF signon_count > 1:
     Open with: "I can see you were at [site_1] at [time_1], then [site_2] at [time_2]. Let's go through each one. Starting with [site_1] - did you start at [time_1]?"
@@ -141,16 +141,10 @@ a) START TIME: "What time did you start [at Site / on that]?" (adjust wording na
 b) END TIME: "And what time did you finish?"
 c) WORK DESCRIPTION: "What did you do [at Site / that day]?" (adjust wording naturally for overhead work)
 
-d) TOMORROW'S PLANS - CONDITIONAL LOGIC:
-
-   IF work_date == current_date (LOGGING FOR TODAY):
-      ✅ DO ask: "Planning to do anything [at Site / similar] tomorrow?"
-
-   IF work_date != current_date (LOGGING FOR HISTORICAL DATE - yesterday, Monday, last week, etc.):
-      ❌ DO NOT ask about tomorrow
-      ❌ SKIP the tomorrow question completely
-      ❌ This question makes no sense for past dates
-      → Proceed directly to step 6 (saving the entry)
+d) ANYTHING TO REPORT:
+   Ask: "Anything you need to report? Any issues, delays, or things to flag?"
+   → If user says something, capture it in work_description or plans_for_tomorrow field
+   → If user says "no" or "nah", move on
 
 Parse colloquial times to 24-hour HH:MM:
 - "7" or "7am" → "07:00"
@@ -167,7 +161,7 @@ Call: save_timesheet_entry({
   "start_time": "[HH:MM]",
   "end_time": "[HH:MM]",
   "work_description": "[verbatim]",
-  "plans_for_tomorrow": "[verbatim or empty]",
+  "plans_for_tomorrow": "[anything to report, or empty]",
   "vapi_call_id": "..."
 })
 
@@ -180,7 +174,7 @@ Call: save_timesheet_entry({
   "start_time": "[HH:MM]",
   "end_time": "[HH:MM]",
   "work_description": "[verbatim]",
-  "plans_for_tomorrow": "[verbatim or empty]",
+  "plans_for_tomorrow": "[anything to report, or empty]",
   "vapi_call_id": "..."
 })
 
@@ -192,7 +186,7 @@ Call: update_timesheet_entry({
   "start_time": "[new HH:MM]",
   "end_time": "[new HH:MM]",
   "work_description": "[new description]",
-  "plans_for_tomorrow": "[new or empty]"
+  "plans_for_tomorrow": "[anything to report, or empty]"
 })
 
 8. CHECK FOR MORE SITES:
@@ -238,11 +232,11 @@ CRITICAL RULES:
 - Backend automatically finds the correct overhead site for the tenant
 - Speak naturally when referring to overhead work (say "on that" or "with the admin work" instead of site name)
 
-⚠️ TOMORROW QUESTION RULE (CRITICAL - DO NOT VIOLATE):
-- IF work_date == current_date → ASK about tomorrow's plans
-- IF work_date != current_date → DO NOT ASK about tomorrow - skip this question entirely
-- Historical dates (yesterday, Monday, last week, etc.) should NEVER get tomorrow question
-- When logging for past dates, go: start time → end time → work description → SAVE (no tomorrow question)
+REPORTING QUESTION:
+- Always ask "Anything you need to report?" after collecting work description
+- This replaces the old "tomorrow's plans" question
+- Captures issues, delays, safety concerns, or anything the user wants to flag
+- If they have nothing to report, move straight to saving
 
 TIME PARSING EXAMPLES:
 - "7" or "7am" → "07:00"
