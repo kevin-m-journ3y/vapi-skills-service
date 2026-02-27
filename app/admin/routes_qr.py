@@ -169,8 +169,11 @@ async def delete_site(site_id: str, request: Request):
 
         if resp.status_code in (200, 204):
             return {"success": True}
+        elif resp.status_code == 409 or "violates foreign key constraint" in resp.text:
+            return {"success": False, "error": "This site has existing data (timesheets, sign-ons, or updates) and cannot be deleted."}
         else:
-            return {"success": False, "error": resp.text}
+            logger.error("Failed to delete site %s: %s", site_id, resp.text)
+            return {"success": False, "error": "Failed to delete site"}
 
 
 # ============================================
