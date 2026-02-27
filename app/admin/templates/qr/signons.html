@@ -1,5 +1,5 @@
 {% extends "layouts/base.html" %}
-{% block title %}Sign-Ons{% endblock %}
+{% block title %}QR Sign-Ons{% endblock %}
 {% block content %}
 <div x-data="signonsReport()" x-init="init()">
     <!-- Toast -->
@@ -12,8 +12,8 @@
     <!-- Header -->
     <div class="flex justify-between items-center mb-6">
         <div>
-            <h1 class="text-4xl font-bold">Sign-Ons</h1>
-            <p class="text-base-content/70 mt-2">Track sign-on activity across sites</p>
+            <h1 class="text-4xl font-bold">QR Sign-Ons</h1>
+            <p class="text-base-content/70 mt-2">Track QR sign-on activity and timesheet completion</p>
         </div>
         <button class="btn btn-outline btn-sm" @click="exportCSV()" x-show="signons.length > 0">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
@@ -78,11 +78,11 @@
             <div class="stat-value text-primary" x-text="stats.total || 0"></div>
         </div>
         <div class="stat bg-base-100 rounded-box shadow">
-            <div class="stat-title">Currently Active</div>
+            <div class="stat-title">Awaiting Jill</div>
             <div class="stat-value text-warning" x-text="stats.active || 0"></div>
         </div>
         <div class="stat bg-base-100 rounded-box shadow">
-            <div class="stat-title">Signed Off</div>
+            <div class="stat-title">Complete</div>
             <div class="stat-value text-success" x-text="stats.signed_off || 0"></div>
         </div>
     </div>
@@ -100,66 +100,48 @@
                         <tr>
                             <th>User</th>
                             <th>Site</th>
-                            <th>Signed On</th>
-                            <th>Signed Off</th>
-                            <th>Duration</th>
+                            <th>QR Scan</th>
+                            <th>Start Time</th>
+                            <th>End Time</th>
+                            <th>Hours</th>
                             <th>Status</th>
-                            <th>Method</th>
                         </tr>
                     </thead>
                     <tbody>
                         <template x-for="(s, idx) in signons" :key="s.id">
-                            <tr>
+                            <tr class="cursor-pointer hover" @click="s.call_transcript ? (expandedId = expandedId === s.id ? null : s.id) : null">
                                 <td x-text="s.user_name"></td>
                                 <td x-text="s.site_name"></td>
                                 <td>
-                                    <div x-show="!isEditing(s.id, 'signed_on_at')" class="flex items-center gap-1">
-                                        <span x-text="formatDateTime(s.signed_on_at)"></span>
-                                        <button class="btn btn-ghost btn-xs px-1 opacity-40 hover:opacity-100" @click.stop="editTime(idx, 'signed_on_at')" title="Edit time">
-                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                                        </button>
-                                    </div>
-                                    <div x-show="isEditing(s.id, 'signed_on_at')" class="flex flex-col gap-1" x-cloak>
-                                        <input type="datetime-local" class="input input-bordered input-xs w-44"
-                                               :value="toLocalInput(s.signed_on_at)"
-                                               @keyup.escape="editingId = null"
-                                               @keyup.enter="saveTime(idx, 'signed_on_at', $event.target.value)" />
-                                        <div class="flex gap-1">
-                                            <button class="btn btn-success btn-xs gap-1" @click="saveTime(idx, 'signed_on_at', $el.closest('td').querySelector('input').value)">
-                                                <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
-                                                Save
-                                            </button>
-                                            <button class="btn btn-ghost btn-xs" @click="editingId = null">Cancel</button>
-                                        </div>
-                                    </div>
+                                    <span class="text-sm" x-text="formatTime(s.signed_on_at)"></span>
                                 </td>
                                 <td>
-                                    <div x-show="!isEditing(s.id, 'signed_off_at')" class="flex items-center gap-1">
-                                        <span x-text="s.signed_off_at ? formatDateTime(s.signed_off_at) : '-'"></span>
-                                        <button class="btn btn-ghost btn-xs px-1 opacity-40 hover:opacity-100" @click.stop="editTime(idx, 'signed_off_at')" title="Edit time">
-                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                                        </button>
-                                    </div>
-                                    <div x-show="isEditing(s.id, 'signed_off_at')" class="flex flex-col gap-1" x-cloak>
-                                        <input type="datetime-local" class="input input-bordered input-xs w-44"
-                                               :value="toLocalInput(s.signed_off_at)"
-                                               @keyup.escape="editingId = null"
-                                               @keyup.enter="saveTime(idx, 'signed_off_at', $event.target.value)" />
-                                        <div class="flex gap-1">
-                                            <button class="btn btn-success btn-xs gap-1" @click="saveTime(idx, 'signed_off_at', $el.closest('td').querySelector('input').value)">
-                                                <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
-                                                Save
-                                            </button>
-                                            <button class="btn btn-ghost btn-xs" @click="editingId = null">Cancel</button>
-                                        </div>
-                                    </div>
-                                </td>
-                                <td x-text="calcDuration(s)"></td>
-                                <td>
-                                    <span class="badge badge-sm" :class="s.status === 'active' ? 'badge-warning' : 'badge-success'" x-text="s.status"></span>
+                                    <span x-text="s.start_time ? formatHHMM(s.start_time) : '-'" class="text-sm"></span>
                                 </td>
                                 <td>
-                                    <span class="text-sm text-base-content/60" x-text="s.signoff_method || '-'"></span>
+                                    <span x-text="s.end_time ? formatHHMM(s.end_time) : '-'" class="text-sm"></span>
+                                </td>
+                                <td>
+                                    <span x-text="s.hours_worked != null ? s.hours_worked + ' hrs' : '-'"
+                                          class="badge badge-sm"
+                                          :class="s.hours_worked != null ? getHoursBadgeClass(s.hours_worked) : ''"></span>
+                                </td>
+                                <td class="flex items-center gap-1">
+                                    <span class="badge badge-sm"
+                                          :class="s.status === 'active' ? 'badge-warning' : 'badge-success'"
+                                          x-text="s.status === 'active' ? 'Awaiting Jill' : 'Complete'"></span>
+                                    <svg x-show="s.call_transcript" xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5 opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                                    </svg>
+                                </td>
+                            </tr>
+                        </template>
+                        <!-- Transcript expansion rows (rendered separately to avoid template nesting issues) -->
+                        <template x-for="s in signons.filter(s => s.id === expandedId && s.call_transcript)" :key="'t-'+s.id">
+                            <tr class="bg-base-200">
+                                <td colspan="7" class="p-4">
+                                    <div class="text-xs font-semibold mb-2 text-base-content/60">Call Transcript</div>
+                                    <pre class="text-sm whitespace-pre-wrap font-sans leading-relaxed max-h-64 overflow-y-auto" x-text="s.call_transcript"></pre>
                                 </td>
                             </tr>
                         </template>
@@ -188,6 +170,7 @@ function signonsReport() {
         loading: false,
         editingId: null,
         editingField: null,
+        expandedId: null,
         toast: { show: false, message: '', type: 'success' },
         dateFrom: new Date().toISOString().split('T')[0],
         dateTo: new Date().toISOString().split('T')[0],
@@ -273,13 +256,26 @@ function signonsReport() {
                    d.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: true });
         },
 
-        calcDuration(signon) {
-            if (!signon.signed_off_at) return '-';
-            const start = new Date(signon.signed_on_at);
-            const end = new Date(signon.signed_off_at);
-            const hours = (end - start) / (1000 * 60 * 60);
-            if (hours < 1) return Math.round(hours * 60) + 'm';
-            return hours.toFixed(1) + 'h';
+        formatTime(iso) {
+            if (!iso) return '-';
+            const d = new Date(iso);
+            return d.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: true });
+        },
+
+        getHoursBadgeClass(hours) {
+            if (hours >= 7) return 'badge-success';
+            if (hours >= 4) return 'badge-warning';
+            return 'badge-error';
+        },
+
+        formatHHMM(timeStr) {
+            if (!timeStr) return '-';
+            // timeStr is "HH:MM:SS" or "HH:MM" from postgres
+            const [h, m] = timeStr.split(':');
+            const hour = parseInt(h);
+            const ampm = hour >= 12 ? 'pm' : 'am';
+            const h12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+            return `${h12}:${m} ${ampm}`;
         },
 
         showToast(message, type = 'success') {
@@ -346,9 +342,10 @@ function signonsReport() {
         },
 
         exportCSV() {
-            const headers = ['User', 'Site', 'Signed On', 'Signed Off', 'Status', 'Method'];
+            const headers = ['User', 'Site', 'QR Scan', 'Start Time', 'End Time', 'Hours', 'Status'];
             const rows = this.signons.map(s => [
-                s.user_name, s.site_name, s.signed_on_at, s.signed_off_at || '', s.status, s.signoff_method || ''
+                s.user_name, s.site_name, s.signed_on_at, s.start_time || '', s.end_time || '',
+                s.hours_worked != null ? s.hours_worked : '', s.status
             ]);
             const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\n');
             const blob = new Blob([csv], { type: 'text/csv' });

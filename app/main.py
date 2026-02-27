@@ -439,6 +439,22 @@ async def handle_end_of_call_report(request: Request):
             if notes_response.status_code in [200, 204]:
                 logger.info(f"✓ Updated voice_notes with real transcript for call {call_id}")
 
+            # Also update timesheets with call transcript
+            ts_response = await client.patch(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/timesheets",
+                headers={
+                    "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal"
+                },
+                params={"vapi_call_id": f"eq.{call_id}"},
+                json={"call_transcript": full_transcript}
+            )
+
+            if ts_response.status_code in [200, 204]:
+                logger.info(f"✓ Updated timesheets with call transcript for call {call_id}")
+
             return {"success": True}
 
     except Exception as e:

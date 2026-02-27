@@ -507,7 +507,7 @@ async def get_signons_data(
 
         params = {
             "tenant_id": f"eq.{tenant_id}",
-            "select": "id,user_id,site_id,signed_on_at,signed_off_at,status,signoff_method,short_code",
+            "select": "id,user_id,site_id,signed_on_at,signed_off_at,status,signoff_method,short_code,timesheet_id",
             "order": "signed_on_at.desc",
             "limit": "500",
         }
@@ -559,9 +559,35 @@ async def get_signons_data(
         )
         site_map = {s["id"]: s["name"] for s in (sites_resp.json() if sites_resp.status_code == 200 else [])}
 
+        # Enrich with linked timesheet data (start_time, end_time, hours_worked)
+        timesheet_ids = [s["timesheet_id"] for s in signons if s.get("timesheet_id")]
+        ts_map = {}
+        if timesheet_ids:
+            ts_resp = await client.get(
+                f"{_url()}/rest/v1/timesheets",
+                headers=_headers(),
+                params={
+                    "id": f"in.({','.join(timesheet_ids)})",
+                    "select": "id,start_time,end_time,hours_worked,work_description,call_transcript",
+                },
+            )
+            if ts_resp.status_code == 200:
+                ts_map = {t["id"]: t for t in ts_resp.json()}
+
         for s in signons:
             s["user_name"] = user_map.get(s["user_id"], "Unknown")
             s["site_name"] = site_map.get(s["site_id"], "Unknown")
+            ts = ts_map.get(s.get("timesheet_id"))
+            if ts:
+                s["start_time"] = ts.get("start_time")
+                s["end_time"] = ts.get("end_time")
+                s["hours_worked"] = ts.get("hours_worked")
+                s["call_transcript"] = ts.get("call_transcript")
+            else:
+                s["start_time"] = None
+                s["end_time"] = None
+                s["hours_worked"] = None
+                s["call_transcript"] = None
 
         # Stats
         stats = {
