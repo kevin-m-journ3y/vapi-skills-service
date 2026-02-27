@@ -140,7 +140,7 @@ async def _find_users_needing_reminder(tenant_id: str, timezone_str: str) -> lis
             headers=_headers(),
             params={
                 "id": f"in.({','.join(missing_user_ids)})",
-                "qr_signon_enrolled": "eq.true",
+                "sms_reminders_enabled": "eq.true",
                 "is_active": "eq.true",
                 "select": "id,name,phone_number",
             },

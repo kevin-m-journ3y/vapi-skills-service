@@ -618,7 +618,7 @@ async def get_users_data(
                         "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
                     },
                     params={
-                        "select": "id,name,phone_number,email,role,is_active,qr_signon_enrolled,created_at,tenants(name)",
+                        "select": "id,name,phone_number,email,role,is_active,sms_reminders_enabled,created_at,tenants(name)",
                         "order": "created_at.desc",
                         "limit": "100"
                     }
@@ -684,7 +684,7 @@ async def get_users_data(
                 },
                 params={
                     "tenant_id": f"eq.{tenant_id}",
-                    "select": "id,name,phone_number,email,role,is_active,qr_signon_enrolled,created_at",
+                    "select": "id,name,phone_number,email,role,is_active,sms_reminders_enabled,created_at",
                     "order": "created_at.desc"
                 }
             )

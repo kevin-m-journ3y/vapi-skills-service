@@ -9,7 +9,7 @@
     <div class="mb-8 flex justify-between items-center">
         <div>
             <h1 class="text-4xl font-bold">Team</h1>
-            <p class="text-base-content/70 mt-2">Manage your team members, skills, and QR sign-on enrollment</p>
+            <p class="text-base-content/70 mt-2">Manage your team members, skills, and SMS reminders</p>
         </div>
         <div class="flex items-center gap-2">
             <!-- Tenant Switcher (Super Admin Only) -->
@@ -83,7 +83,7 @@
                             <th>Phone Number</th>
                             <th>Role</th>
                             <th>Skills</th>
-                            <th class="text-center">QR Enrolled</th>
+                            <th class="text-center">SMS Reminders</th>
                             <th>Status</th>
                             <th>Actions</th>
                         </tr>
@@ -159,7 +159,7 @@
                                     <input
                                         type="checkbox"
                                         class="toggle toggle-sm toggle-info"
-                                        :checked="user.qr_signon_enrolled"
+                                        :checked="user.sms_reminders_enabled"
                                         @change="toggleQrEnrollment(userIndex)"
                                         :disabled="user.togglingQr"
                                     />
@@ -587,13 +587,13 @@ function userManagement() {
                 if (response.ok) {
                     const data = await response.json();
                     if (data.success) {
-                        this.users[userIndex].qr_signon_enrolled = data.enrolled;
-                        this.showToast(`${user.name} ${data.enrolled ? 'enrolled in' : 'removed from'} QR sign-on`);
+                        this.users[userIndex].sms_reminders_enabled = data.enrolled;
+                        this.showToast(`${user.name} SMS reminders ${data.enrolled ? 'enabled' : 'disabled'}`);
                     } else {
-                        this.showToast('Failed to update enrollment', 'error');
+                        this.showToast('Failed to update SMS setting', 'error');
                     }
                 } else {
-                    this.showToast('Failed to update enrollment', 'error');
+                    this.showToast('Failed to update SMS setting', 'error');
                 }
             } catch (err) {
                 this.showToast('Connection error', 'error');

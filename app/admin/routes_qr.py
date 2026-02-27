@@ -650,7 +650,7 @@ async def get_enrollment_data(request: Request, tenant_id: str = None):
             params={
                 "tenant_id": f"eq.{tenant_id}",
                 "is_active": "eq.true",
-                "select": "id,name,phone_number,role,qr_signon_enrolled",
+                "select": "id,name,phone_number,role,sms_reminders_enabled",
                 "order": "name.asc",
             },
         )
@@ -667,13 +667,13 @@ async def toggle_enrollment(user_id: str, request: Request):
         user_resp = await client.get(
             f"{_url()}/rest/v1/users",
             headers=_headers(),
-            params={"id": f"eq.{user_id}", "select": "id,qr_signon_enrolled,tenant_id"},
+            params={"id": f"eq.{user_id}", "select": "id,sms_reminders_enabled,tenant_id"},
         )
         if user_resp.status_code != 200 or not user_resp.json():
             return {"success": False, "error": "User not found"}
 
         user = user_resp.json()[0]
-        new_status = not user.get("qr_signon_enrolled", False)
+        new_status = not user.get("sms_reminders_enabled", False)
 
         # Verify tenant access
         is_super_admin = user_session.get("role") == "super_admin"
@@ -684,7 +684,7 @@ async def toggle_enrollment(user_id: str, request: Request):
             f"{_url()}/rest/v1/users",
             headers={**_headers(), "Prefer": "return=minimal"},
             params={"id": f"eq.{user_id}"},
-            json={"qr_signon_enrolled": new_status},
+            json={"sms_reminders_enabled": new_status},
         )
 
         if resp.status_code in (200, 204):
