@@ -54,6 +54,14 @@
                         </template>
                     </select>
                 </div>
+                <div class="form-control">
+                    <label class="label label-text text-xs">Status</label>
+                    <select class="select select-bordered select-sm w-36" x-model="selectedStatus" @change="loadData()">
+                        <option value="all">All</option>
+                        <option value="active">Active</option>
+                        <option value="signed_off">Signed Off</option>
+                    </select>
+                </div>
                 <div class="flex gap-1">
                     <button class="btn btn-xs" @click="setPreset('today')">Today</button>
                     <button class="btn btn-xs" @click="setPreset('week')">This Week</button>
@@ -175,6 +183,7 @@ function signonsReport() {
         signons: [],
         users: [],
         selectedUserId: '',
+        selectedStatus: 'all',
         stats: {},
         loading: false,
         editingId: null,
@@ -243,6 +252,7 @@ function signonsReport() {
                     date_to: this.dateTo,
                 });
                 if (this.selectedUserId) params.set('user_id', this.selectedUserId);
+                if (this.selectedStatus !== 'all') params.set('status', this.selectedStatus);
                 const resp = await fetch(`/admin/qr-signons/data?${params}`, { credentials: 'same-origin' });
                 if (resp.ok) {
                     const data = await resp.json();

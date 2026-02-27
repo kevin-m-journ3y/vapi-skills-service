@@ -479,6 +479,7 @@ async def get_signons_data(
     user_id: str = None,
     date_from: str = None,
     date_to: str = None,
+    status: str = None,
 ):
     user_session = await _get_session_user(request)
     is_super_admin = user_session.get("role") == "super_admin"
@@ -515,17 +516,19 @@ async def get_signons_data(
             params["site_id"] = f"eq.{site_id}"
         if user_id:
             params["user_id"] = f"eq.{user_id}"
+        if status and status != "all":
+            params["status"] = f"eq.{status}"
 
-        # Build timezone-aware date filters (use tz.localize, not .replace(tzinfo=))
+        # Build timezone-aware date filters (ZoneInfo handles DST correctly with .replace)
         if date_from and date_to:
-            from_dt = tz.localize(datetime.strptime(date_from, "%Y-%m-%d"))
-            to_dt = tz.localize(datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59))
+            from_dt = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=tz)
+            to_dt = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=tz)
             params["and"] = f"(signed_on_at.gte.{from_dt.isoformat()},signed_on_at.lte.{to_dt.isoformat()})"
         elif date_from:
-            from_dt = tz.localize(datetime.strptime(date_from, "%Y-%m-%d"))
+            from_dt = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=tz)
             params["signed_on_at"] = f"gte.{from_dt.isoformat()}"
         elif date_to:
-            to_dt = tz.localize(datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59))
+            to_dt = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=tz)
             params["signed_on_at"] = f"lte.{to_dt.isoformat()}"
 
         resp = await client.get(
