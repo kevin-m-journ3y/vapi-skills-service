@@ -169,8 +169,8 @@ function signonsReport() {
         editingField: null,
         expandedId: null,
         toast: { show: false, message: '', type: 'success' },
-        dateFrom: new Date().toISOString().split('T')[0],
-        dateTo: new Date().toISOString().split('T')[0],
+        dateFrom: (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })(),
+        dateTo: (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })(),
 
         async init() {
             const resp = await fetch('/admin/auth/me', { credentials: 'same-origin' });
@@ -194,19 +194,23 @@ function signonsReport() {
             }
         },
 
+        localDateStr(d) {
+            return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        },
+
         setPreset(preset) {
             const today = new Date();
-            this.dateTo = today.toISOString().split('T')[0];
+            this.dateTo = this.localDateStr(today);
 
             if (preset === 'today') {
-                this.dateFrom = today.toISOString().split('T')[0];
+                this.dateFrom = this.localDateStr(today);
             } else if (preset === 'week') {
                 const monday = new Date(today);
                 monday.setDate(today.getDate() - today.getDay() + 1);
-                this.dateFrom = monday.toISOString().split('T')[0];
+                this.dateFrom = this.localDateStr(monday);
             } else if (preset === 'month') {
                 const first = new Date(today.getFullYear(), today.getMonth(), 1);
-                this.dateFrom = first.toISOString().split('T')[0];
+                this.dateFrom = this.localDateStr(first);
             }
             this.loadData();
         },

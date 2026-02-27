@@ -552,7 +552,7 @@ function timesheetReport() {
 
         applyDatePreset(shouldLoad = true) {
             const today = new Date();
-            const formatDate = (date) => date.toISOString().split('T')[0];
+            const formatDate = (date) => `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
 
             switch(this.datePreset) {
                 case 'today':
