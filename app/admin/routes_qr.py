@@ -342,6 +342,15 @@ async def generate_site_qr(site_id: str, request: Request):
         site = site_resp.json()[0]
         tenant_id = site["tenant_id"]
 
+        # Check QR sign-on is enabled for this tenant
+        config_resp = await client.get(
+            f"{_url()}/rest/v1/qr_signon_config",
+            headers=_headers(),
+            params={"tenant_id": f"eq.{tenant_id}", "select": "is_enabled"},
+        )
+        if config_resp.status_code != 200 or not config_resp.json() or not config_resp.json()[0].get("is_enabled"):
+            return {"success": False, "error": "QR Sign-On is not enabled for this company. Enable it in Settings first."}
+
         # Check if QR already exists
         existing = await client.get(
             f"{_url()}/rest/v1/site_qr_codes",

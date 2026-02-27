@@ -46,6 +46,12 @@
         Select a company to manage sites
     </div>
 
+    <!-- QR Not Enabled Banner -->
+    <div x-show="!loading && selectedTenantId && !qrEnabled" x-cloak class="alert alert-warning mb-4">
+        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+        <span>QR Sign-On is not enabled for this company. Enable it in <a href="/admin/settings" class="link link-primary font-semibold">Settings</a> before generating QR codes.</span>
+    </div>
+
     <!-- Sites Table -->
     <div x-show="!loading && selectedTenantId && sites.length > 0" x-cloak class="card bg-base-100 shadow-lg">
         <div class="card-body p-0">
@@ -87,10 +93,12 @@
                                         </div>
                                     </template>
                                     <template x-if="!site.has_qr">
-                                        <button class="btn btn-xs btn-outline btn-primary" @click="generateQR(site)" :disabled="site.generating">
-                                            <span x-show="!site.generating">Generate QR</span>
-                                            <span x-show="site.generating" class="loading loading-spinner loading-xs"></span>
-                                        </button>
+                                        <div :title="!qrEnabled ? 'Enable QR Sign-On in Settings first' : ''">
+                                            <button class="btn btn-xs btn-outline btn-primary" @click="generateQR(site)" :disabled="site.generating || !qrEnabled">
+                                                <span x-show="!site.generating">Generate QR</span>
+                                                <span x-show="site.generating" class="loading loading-spinner loading-xs"></span>
+                                            </button>
+                                        </div>
                                     </template>
                                 </td>
                                 <td>
@@ -174,6 +182,7 @@ function siteManagement() {
         tenants: [],
         sites: [],
         loading: false,
+        qrEnabled: false,
         toast: { show: false, message: '', type: 'success' },
         editForm: { isNew: true, siteId: null, siteIndex: null, name: '', address: '', saving: false },
         deleteTarget: null,
@@ -216,13 +225,20 @@ function siteManagement() {
         },
 
         async loadSites() {
-            if (!this.selectedTenantId) { this.sites = []; return; }
+            if (!this.selectedTenantId) { this.sites = []; this.qrEnabled = false; return; }
             this.loading = true;
             try {
-                const resp = await fetch(`/admin/qr-signons/sites?tenant_id=${this.selectedTenantId}`, { credentials: 'same-origin' });
-                if (resp.ok) {
-                    const data = await resp.json();
+                const [sitesResp, configResp] = await Promise.all([
+                    fetch(`/admin/qr-signons/sites?tenant_id=${this.selectedTenantId}`, { credentials: 'same-origin' }),
+                    fetch(`/admin/qr-signons/config/data?tenant_id=${this.selectedTenantId}`, { credentials: 'same-origin' }),
+                ]);
+                if (sitesResp.ok) {
+                    const data = await sitesResp.json();
                     if (data.success) this.sites = data.sites.map(s => ({ ...s, generating: false }));
+                }
+                if (configResp.ok) {
+                    const data = await configResp.json();
+                    this.qrEnabled = !!(data.success && data.config?.is_enabled);
                 }
             } finally {
                 this.loading = false;
