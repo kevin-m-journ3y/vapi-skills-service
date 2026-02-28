@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 import httpx
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import logging
 
@@ -97,7 +97,7 @@ async def update_last_login(user_id: str):
                 "Prefer": "return=minimal"
             },
             params={"id": f"eq.{user_id}"},
-            json={"last_login_at": datetime.utcnow().isoformat()}
+            json={"last_login_at": datetime.now(timezone.utc).isoformat()}
         )
 
 
@@ -184,7 +184,7 @@ async def login(request: Request, login_data: LoginRequest):
             "tenant_id": user.get("tenant_id"),
             "tenant_name": user.get("tenants", {}).get("name") if user.get("tenants") else None,
             "permissions": permissions,
-            "login_time": datetime.utcnow().isoformat()
+            "login_time": datetime.now(timezone.utc).isoformat()
         }
 
         # Store session in request.session (handled by SessionMiddleware)

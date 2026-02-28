@@ -2,7 +2,7 @@ import httpx
 import os
 import json
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 class SupabaseClient:
     def __init__(self):
@@ -58,7 +58,7 @@ class SupabaseClient:
                     "phone_number": phone_number,
                     "success": success,
                     "details": details or {},
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 }
                 
                 # Log to console for Phase 1

@@ -11,7 +11,7 @@ import json
 import httpx
 import uuid
 from datetime import datetime, time as datetime_time
-import pytz
+from zoneinfo import ZoneInfo
 
 from app.vapi_utils import extract_vapi_args
 from app.config import settings
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["timesheet"])
 
 # Sydney timezone for date handling
-SYDNEY_TZ = pytz.timezone('Australia/Sydney')
+SYDNEY_TZ = ZoneInfo('Australia/Sydney')
 
 
 # Helper function to get session context
@@ -403,7 +403,7 @@ async def save_timesheet_entry(request: dict):
             if not work_date_str:
                 # Fallback to Sydney time if not in session (backwards compatibility)
                 tenant_timezone = session_context.get("tenant_timezone", "Australia/Sydney")
-                tz = pytz.timezone(tenant_timezone)
+                tz = ZoneInfo(tenant_timezone)
                 work_date_str = datetime.now(tz).strftime('%Y-%m-%d')
 
         work_date = work_date_str
@@ -456,7 +456,7 @@ async def save_timesheet_entry(request: dict):
             async with httpx.AsyncClient() as client:
                 # Find active sign-on for this user + site + today
                 tenant_timezone = session_context.get("tenant_timezone", "Australia/Sydney")
-                tz = pytz.timezone(tenant_timezone)
+                tz = ZoneInfo(tenant_timezone)
                 today_start = datetime.strptime(work_date, '%Y-%m-%d').replace(
                     hour=0, minute=0, second=0, tzinfo=tz
                 )
@@ -675,7 +675,7 @@ async def get_recent_timesheets(request: dict):
 
         # Calculate date range
         from datetime import timedelta
-        tz = pytz.timezone(tenant_timezone)
+        tz = ZoneInfo(tenant_timezone)
 
         # If current_date is not available, calculate it from tenant timezone
         if current_date:
@@ -1120,15 +1120,14 @@ async def get_signon_data(request: dict):
 
         # Calculate today's date in tenant timezone if not in session
         if not current_date:
-            tz = pytz.timezone(tenant_timezone)
+            tz = ZoneInfo(tenant_timezone)
             current_date = datetime.now(tz).strftime('%Y-%m-%d')
 
-        # Query site_signons for today (active or signed_off, not expired)
-        # Must use tz.localize() not .replace(tzinfo=) to get correct DST offset
-        tz = pytz.timezone(tenant_timezone)
+        # Query site_signons for today
+        tz = ZoneInfo(tenant_timezone)
         today_naive = datetime.strptime(current_date, '%Y-%m-%d')
-        today_start = tz.localize(today_naive.replace(hour=0, minute=0, second=0))
-        today_end = tz.localize(today_naive.replace(hour=23, minute=59, second=59))
+        today_start = today_naive.replace(hour=0, minute=0, second=0, tzinfo=tz)
+        today_end = today_naive.replace(hour=23, minute=59, second=59, tzinfo=tz)
 
         async with httpx.AsyncClient() as client:
             resp = await client.get(

@@ -9,10 +9,10 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import httpx
 import os
-from datetime import datetime
+from datetime import datetime, date, timezone
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 import uuid
-from datetime import datetime, date
 import logging
 import json
 from app.vapi_voice_notes import VoiceNotesVAPISystem, add_voice_notes_management_endpoints, VAPIConfig
@@ -875,7 +875,7 @@ async def log_vapi_interaction(vapi_call_id: str, interaction_type: str = None,
                 "tenant_id": tenant_id,
                 "caller_phone": caller_phone,
                 "raw_log_data": details or {},
-                "created_at": datetime.utcnow().isoformat()
+                "created_at": datetime.now(timezone.utc).isoformat()
             }
             
             # Only add interaction_type if the column exists
@@ -1748,7 +1748,7 @@ async def start_skill_session(
             "session_type": "external_customer" if request.called_phone else "internal_user",
             "status": "in_progress",
             "raw_log_data": {
-                "session_started": datetime.utcnow().isoformat(),
+                "session_started": datetime.now(timezone.utc).isoformat(),
                 "initial_data": request.session_data
             }
         }
@@ -2311,7 +2311,7 @@ async def send_workshop_infographic(request: Request):
                             <p style="margin-top: 24px; color: #6B7280;">Good luck with the workshop! 🚀</p>
                         </div>
                         <div style="background-color: #F9FAFB; padding: 24px; text-align: center; border-top: 1px solid #E5E7EB;">
-                            <p style="margin: 0; color: #9CA3AF; font-size: 12px;">Sent by Jill • {datetime.now().strftime('%d %B %Y at %I:%M %p')}</p>
+                            <p style="margin: 0; color: #9CA3AF; font-size: 12px;">Sent by Jill • {datetime.now(ZoneInfo('Australia/Sydney')).strftime('%d %B %Y at %I:%M %p')}</p>
                         </div>
                     </div>
                 </body>

@@ -11,7 +11,8 @@ from datetime import datetime, date
 from typing import Optional
 
 import httpx
-import pytz
+from datetime import timezone
+from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -81,20 +82,22 @@ async def _get_enabled_tenants() -> list:
 
         for c in configs:
             c["timezone"] = tz_map.get(c["tenant_id"], "Australia/Sydney")
+            if not tz_map.get(c["tenant_id"]):
+                logger.warning("No timezone for tenant %s, defaulting to Australia/Sydney", c["tenant_id"])
 
         return configs
 
 
 async def _find_users_needing_reminder(tenant_id: str, timezone_str: str) -> list:
     """Find enrolled users who signed on today but have no timesheet entry."""
-    tz = pytz.timezone(timezone_str)
+    tz = ZoneInfo(timezone_str)
     now_local = datetime.now(tz)
     today = now_local.date()
 
     # Build date boundaries in UTC for querying
-    today_start_local = tz.localize(datetime.combine(today, datetime.min.time()))
-    today_end_local = tz.localize(datetime.combine(today, datetime.max.time()))
-    today_start_utc = today_start_local.astimezone(pytz.utc).isoformat()
+    today_start_local = datetime.combine(today, datetime.min.time()).replace(tzinfo=tz)
+    today_end_local = datetime.combine(today, datetime.max.time()).replace(tzinfo=tz)
+    today_start_utc = today_start_local.astimezone(timezone.utc).isoformat()
 
     async with httpx.AsyncClient() as client:
         # Get users who signed on today and are enrolled
@@ -285,7 +288,9 @@ async def reschedule_tenant(tenant_id: str):
         )
         tz = "Australia/Sydney"
         if tenant_resp.status_code == 200 and tenant_resp.json():
-            tz = tenant_resp.json()[0].get("timezone", "Australia/Sydney")
+            tz = tenant_resp.json()[0].get("timezone") or "Australia/Sydney"
+        if tz == "Australia/Sydney":
+            logger.warning("No timezone for tenant %s, defaulting to Australia/Sydney", tenant_id)
 
         config["timezone"] = tz
         _schedule_tenant_jobs(config)

@@ -4,8 +4,9 @@ import os
 import uuid
 import httpx
 import logging
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ async def resolve_short_code(short_code: str) -> Optional[dict]:
             "site_address": site.get("address"),
             "tenant_id": tenant["id"],
             "tenant_name": tenant["name"],
-            "tenant_timezone": tenant.get("timezone", "Australia/Sydney"),
+            "tenant_timezone": tenant.get("timezone") or "Australia/Sydney",
             "post_signon_message": config.get("post_signon_message") if config else None,
             "manager_phone_number": config.get("manager_phone_number") if config else None,
             "jill_phone_number": config.get("jill_phone_number") if config else None,
@@ -159,8 +160,8 @@ async def record_signon(
                     json={
                         "status": "signed_off",
                         "signoff_method": "auto_next_site",
-                        "signed_off_at": datetime.utcnow().isoformat(),
-                        "updated_at": datetime.utcnow().isoformat(),
+                        "signed_off_at": datetime.now(timezone.utc).isoformat(),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
                     },
                 )
 
@@ -192,9 +193,7 @@ async def record_signon(
 
 async def get_active_signons_for_user(user_id: str, tenant_timezone: str = "Australia/Sydney") -> list:
     """Get today's sign-on records for a user (for Jill integration)."""
-    import pytz
-
-    tz = pytz.timezone(tenant_timezone)
+    tz = ZoneInfo(tenant_timezone)
     now_local = datetime.now(tz)
     today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = now_local.replace(hour=23, minute=59, second=59, microsecond=999999)
@@ -251,8 +250,8 @@ async def close_signon(signon_id: str, method: str, timesheet_id: Optional[str] 
     update_data = {
         "status": "signed_off",
         "signoff_method": method,
-        "signed_off_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "signed_off_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     if timesheet_id:
         update_data["timesheet_id"] = timesheet_id

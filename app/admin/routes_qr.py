@@ -4,7 +4,7 @@ import os
 import uuid
 import httpx
 import logging
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Request, HTTPException
 from app.auth_utils import hash_password, validate_password_strength
@@ -238,7 +238,7 @@ async def update_qr_config(request: Request):
         "manager_phone_number": body.get("manager_phone_number", ""),
         "post_signon_message": body.get("post_signon_message", ""),
         "twilio_from_number": body.get("twilio_from_number", ""),
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     async with httpx.AsyncClient() as client:
@@ -499,6 +499,8 @@ async def get_signons_data(
         )
         if tz_resp.status_code == 200 and tz_resp.json():
             tz_str = tz_resp.json()[0].get("timezone") or tz_str
+        if tz_str == "Australia/Sydney":
+            logger.warning(f"No timezone for tenant {tenant_id}, defaulting to Australia/Sydney")
 
         try:
             tz = ZoneInfo(tz_str)

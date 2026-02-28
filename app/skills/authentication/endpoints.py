@@ -10,7 +10,7 @@ from datetime import datetime
 import logging
 import httpx
 import os
-import pytz
+from zoneinfo import ZoneInfo
 
 from app.vapi_utils import extract_vapi_args
 from app.config import settings
@@ -210,10 +210,12 @@ async def authenticate_by_phone(request: dict):
 
             tenant_timezone_str = 'Australia/Sydney'  # Default fallback
             if tenant_response.status_code == 200 and tenant_response.json():
-                tenant_timezone_str = tenant_response.json()[0].get('timezone', 'Australia/Sydney')
+                tenant_timezone_str = tenant_response.json()[0].get('timezone') or 'Australia/Sydney'
+            if tenant_timezone_str == 'Australia/Sydney' and tenant_response.json():
+                logger.warning(f"No timezone configured for tenant {user['tenant_id']}, defaulting to Australia/Sydney")
 
             # Calculate current date/time in tenant's timezone
-            tenant_tz = pytz.timezone(tenant_timezone_str)
+            tenant_tz = ZoneInfo(tenant_timezone_str)
             current_time_in_tz = datetime.now(tenant_tz)
 
             # Format date/time for response
@@ -256,8 +258,8 @@ async def authenticate_by_phone(request: dict):
                     })
 
             # Check for QR sign-ons today (timezone-aware)
-            today_start = tenant_tz.localize(datetime.strptime(current_date, '%Y-%m-%d'))
-            today_end = tenant_tz.localize(datetime.strptime(current_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59))
+            today_start = datetime.strptime(current_date, '%Y-%m-%d').replace(tzinfo=tenant_tz)
+            today_end = datetime.strptime(current_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59, tzinfo=tenant_tz)
 
             signons_response = await client.get(
                 f"{settings.SUPABASE_URL}/rest/v1/site_signons",
