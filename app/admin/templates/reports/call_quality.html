@@ -1,0 +1,452 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Call Quality{% endblock %}
+
+{% block content %}
+<div x-data="callQuality()" x-init="init()">
+    <!-- Page Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold">Call Quality</h1>
+            <p class="text-base-content/70 mt-1">Automated quality assessment of all Jill calls</p>
+        </div>
+        <div class="flex gap-2">
+            <button class="btn btn-primary btn-sm" @click="runEvals()" :disabled="evalRunning">
+                <template x-if="evalRunning">
+                    <span class="loading loading-spinner loading-xs"></span>
+                </template>
+                <span x-text="evalRunning ? 'Running...' : 'Run Evals'"></span>
+            </button>
+            <a href="/admin/learning-loop" class="btn btn-outline btn-sm">Learning Loop</a>
+        </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
+        <div class="stat bg-base-100 shadow rounded-lg p-3">
+            <div class="stat-title text-xs">Total Calls</div>
+            <div class="stat-value text-2xl" x-text="stats.total_calls || 0"></div>
+        </div>
+        <div class="stat bg-base-100 shadow rounded-lg p-3">
+            <div class="stat-title text-xs">Success Rate</div>
+            <div class="stat-value text-2xl" :class="(stats.success_rate || 0) >= 80 ? 'text-success' : (stats.success_rate || 0) >= 50 ? 'text-warning' : 'text-error'">
+                <span x-text="(stats.success_rate || 0) + '%'"></span>
+            </div>
+        </div>
+        <div class="stat bg-base-100 shadow rounded-lg p-3">
+            <div class="stat-title text-xs">Avg Naturalness</div>
+            <div class="stat-value text-2xl" :class="(stats.avg_naturalness || 0) >= 4 ? 'text-success' : (stats.avg_naturalness || 0) >= 3 ? 'text-warning' : 'text-error'">
+                <span x-text="(stats.avg_naturalness || 0) + '/5'"></span>
+            </div>
+        </div>
+        <div class="stat bg-base-100 shadow rounded-lg p-3">
+            <div class="stat-title text-xs">Repeated Questions</div>
+            <div class="stat-value text-2xl" :class="(stats.repeated_questions_count || 0) > 0 ? 'text-warning' : 'text-success'" x-text="stats.repeated_questions_count || 0"></div>
+        </div>
+        <div class="stat bg-base-100 shadow rounded-lg p-3">
+            <div class="stat-title text-xs">Filler Phrases</div>
+            <div class="stat-value text-2xl" :class="(stats.filler_phrases_count || 0) > 0 ? 'text-warning' : 'text-success'" x-text="stats.filler_phrases_count || 0"></div>
+        </div>
+        <div class="stat bg-base-100 shadow rounded-lg p-3">
+            <div class="stat-title text-xs">Avg Duration</div>
+            <div class="stat-value text-2xl" x-text="formatDuration(stats.avg_duration_seconds || 0)"></div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="card bg-base-100 shadow mb-4">
+        <div class="card-body py-3">
+            <div class="flex flex-wrap gap-3 items-end">
+                <div class="form-control">
+                    <label class="label label-text text-xs">From</label>
+                    <input type="date" class="input input-bordered input-sm" x-model="startDate" @change="loadData()" />
+                </div>
+                <div class="form-control">
+                    <label class="label label-text text-xs">To</label>
+                    <input type="date" class="input input-bordered input-sm" x-model="endDate" @change="loadData()" />
+                </div>
+                <div class="form-control">
+                    <label class="label label-text text-xs">Call Type</label>
+                    <select class="select select-bordered select-sm w-40" x-model="selectedCallType" @change="loadData()">
+                        <option value="all">All Types</option>
+                        <option value="timesheet">Timesheet</option>
+                        <option value="voice_notes">Voice Notes</option>
+                        <option value="site_updates">Site Updates</option>
+                        <option value="greeter">Greeter</option>
+                    </select>
+                </div>
+                <div class="flex gap-1">
+                    <button class="btn btn-xs" @click="applyPreset('today')">Today</button>
+                    <button class="btn btn-xs" @click="applyPreset('yesterday')">Yesterday</button>
+                    <button class="btn btn-xs" @click="applyPreset('this_week')">This Week</button>
+                    <button class="btn btn-xs" @click="applyPreset('last_week')">Last Week</button>
+                    <button class="btn btn-xs" @click="applyPreset('this_month')">This Month</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Eval Run Banner -->
+    <div class="alert alert-success shadow mb-4" x-show="evalResult" x-cloak>
+        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        <span class="text-sm" x-text="evalResult"></span>
+        <button class="btn btn-ghost btn-xs" @click="evalResult = ''">dismiss</button>
+    </div>
+
+    <!-- Loading -->
+    <div x-show="loading" class="flex justify-center py-8">
+        <span class="loading loading-spinner loading-lg"></span>
+    </div>
+
+    <!-- No Data -->
+    <div x-show="!loading && calls.length === 0" class="text-center py-12">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto text-base-content/30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+        <p class="text-base-content/50 mt-4">No call quality data yet. Data will appear after calls are made with the analysis plan active.</p>
+    </div>
+
+    <!-- Calls Table -->
+    <div x-show="!loading && calls.length > 0" class="overflow-x-auto">
+        <table class="table table-sm table-zebra w-full">
+            <thead>
+                <tr class="bg-base-200">
+                    <th>When</th>
+                    <th>Caller</th>
+                    <th>Tenant</th>
+                    <th>Type</th>
+                    <th>Duration</th>
+                    <th>Result</th>
+                    <th>Naturalness</th>
+                    <th>Issues</th>
+                    <th>Sentiment</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                <template x-for="call in calls" :key="call.id">
+                    <tr class="hover">
+                        <td class="whitespace-nowrap text-xs" x-text="formatDate(call.call_started_at)"></td>
+                        <td x-text="call.user_name || 'Unknown'"></td>
+                        <td class="text-xs" x-text="call.tenant_name || ''"></td>
+                        <td>
+                            <span class="badge badge-sm"
+                                  :class="{
+                                      'badge-primary': call.call_type === 'timesheet',
+                                      'badge-secondary': call.call_type === 'voice_notes',
+                                      'badge-accent': call.call_type === 'site_updates',
+                                      'badge-ghost': call.call_type === 'greeter'
+                                  }"
+                                  x-text="call.call_type || 'unknown'"></span>
+                        </td>
+                        <td class="text-xs" x-text="formatDuration(call.call_duration_seconds)"></td>
+                        <td>
+                            <span class="badge badge-sm"
+                                  :class="call.success_evaluation === 'true' ? 'badge-success' : call.success_evaluation === 'false' ? 'badge-error' : 'badge-ghost'"
+                                  x-text="call.success_evaluation === 'true' ? 'Pass' : call.success_evaluation === 'false' ? 'Fail' : 'N/A'"></span>
+                        </td>
+                        <td>
+                            <template x-if="call.naturalness_score">
+                                <div class="flex items-center gap-1">
+                                    <template x-for="i in 5">
+                                        <span class="text-xs" :class="i <= call.naturalness_score ? 'text-warning' : 'text-base-300'" x-text="'★'"></span>
+                                    </template>
+                                </div>
+                            </template>
+                            <template x-if="!call.naturalness_score">
+                                <span class="text-xs text-base-content/30">-</span>
+                            </template>
+                        </td>
+                        <td>
+                            <div class="flex gap-1">
+                                <template x-if="call.repeated_questions">
+                                    <span class="badge badge-xs badge-warning" title="Repeated questions">RPT</span>
+                                </template>
+                                <template x-if="call.filler_phrases_used">
+                                    <span class="badge badge-xs badge-warning" title="Filler phrases used">FLR</span>
+                                </template>
+                                <template x-if="call.user_had_to_repeat">
+                                    <span class="badge badge-xs badge-error" title="User had to repeat">USR</span>
+                                </template>
+                                <template x-if="call.flow_steps_skipped && call.flow_steps_skipped.length > 0">
+                                    <span class="badge badge-xs badge-info" title="Flow steps skipped">SKP</span>
+                                </template>
+                                <template x-if="!call.repeated_questions && !call.filler_phrases_used && !call.user_had_to_repeat && (!call.flow_steps_skipped || call.flow_steps_skipped.length === 0)">
+                                    <span class="text-success text-xs">Clean</span>
+                                </template>
+                            </div>
+                        </td>
+                        <td>
+                            <span class="text-xs"
+                                  :class="{
+                                      'text-success': call.user_sentiment === 'positive',
+                                      'text-base-content': call.user_sentiment === 'neutral',
+                                      'text-error': call.user_sentiment === 'frustrated',
+                                      'text-warning': call.user_sentiment === 'confused'
+                                  }"
+                                  x-text="call.user_sentiment || '-'"></span>
+                        </td>
+                        <td>
+                            <button class="btn btn-ghost btn-xs" @click="showDetail(call)">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                            </button>
+                        </td>
+                    </tr>
+                </template>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Detail Modal -->
+    <dialog id="detail_modal" class="modal" :class="{ 'modal-open': showModal }">
+        <div class="modal-box max-w-3xl">
+            <button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" @click="showModal = false">X</button>
+
+            <template x-if="selectedCall">
+                <div>
+                    <h3 class="font-bold text-lg mb-4" x-text="(selectedCall.user_name || 'Unknown') + ' - ' + (selectedCall.call_type || 'Call')"></h3>
+
+                    <!-- Quality Summary -->
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+                        <div class="bg-base-200 rounded p-2 text-center">
+                            <div class="text-xs opacity-60">Result</div>
+                            <div class="font-bold" :class="selectedCall.success_evaluation === 'true' ? 'text-success' : 'text-error'" x-text="selectedCall.success_evaluation === 'true' ? 'Pass' : 'Fail'"></div>
+                        </div>
+                        <div class="bg-base-200 rounded p-2 text-center">
+                            <div class="text-xs opacity-60">Naturalness</div>
+                            <div class="font-bold" x-text="(selectedCall.naturalness_score || '-') + '/5'"></div>
+                        </div>
+                        <div class="bg-base-200 rounded p-2 text-center">
+                            <div class="text-xs opacity-60">Duration</div>
+                            <div class="font-bold" x-text="formatDuration(selectedCall.call_duration_seconds)"></div>
+                        </div>
+                        <div class="bg-base-200 rounded p-2 text-center">
+                            <div class="text-xs opacity-60">Cost</div>
+                            <div class="font-bold" x-text="'$' + (selectedCall.call_cost || 0).toFixed(4)"></div>
+                        </div>
+                    </div>
+
+                    <!-- Issues -->
+                    <template x-if="selectedCall.repeated_questions || selectedCall.filler_phrases_used || selectedCall.user_had_to_repeat || (selectedCall.flow_steps_skipped && selectedCall.flow_steps_skipped.length > 0)">
+                        <div class="mb-4">
+                            <h4 class="font-semibold text-sm mb-2">Issues Detected</h4>
+                            <div class="flex flex-wrap gap-2">
+                                <template x-if="selectedCall.repeated_questions">
+                                    <span class="badge badge-warning gap-1">Repeated Questions</span>
+                                </template>
+                                <template x-if="selectedCall.filler_phrases_used">
+                                    <span class="badge badge-warning gap-1">Filler Phrases Used</span>
+                                </template>
+                                <template x-if="selectedCall.user_had_to_repeat">
+                                    <span class="badge badge-error gap-1">User Had to Repeat</span>
+                                </template>
+                                <template x-if="selectedCall.flow_steps_skipped && selectedCall.flow_steps_skipped.length > 0">
+                                    <template x-for="step in selectedCall.flow_steps_skipped">
+                                        <span class="badge badge-info gap-1" x-text="'Skipped: ' + step"></span>
+                                    </template>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Improvement Notes -->
+                    <template x-if="selectedCall.improvement_notes && selectedCall.improvement_notes !== 'None'">
+                        <div class="mb-4">
+                            <h4 class="font-semibold text-sm mb-2">Improvement Notes</h4>
+                            <div class="bg-base-200 rounded p-3 text-sm" x-text="selectedCall.improvement_notes"></div>
+                        </div>
+                    </template>
+
+                    <!-- Summary -->
+                    <template x-if="selectedCall.summary">
+                        <div class="mb-4">
+                            <h4 class="font-semibold text-sm mb-2">AI Summary</h4>
+                            <div class="bg-base-200 rounded p-3 text-sm" x-text="selectedCall.summary"></div>
+                        </div>
+                    </template>
+
+                    <!-- Transcript -->
+                    <template x-if="detailCall && detailCall.transcript">
+                        <div class="mb-4">
+                            <h4 class="font-semibold text-sm mb-2">Transcript</h4>
+                            <div class="bg-base-200 rounded p-3 text-sm max-h-64 overflow-y-auto whitespace-pre-line font-mono text-xs" x-text="detailCall.transcript"></div>
+                        </div>
+                    </template>
+
+                    <!-- Metadata -->
+                    <div class="text-xs text-base-content/50 mt-4">
+                        <span x-text="'Tenant: ' + (selectedCall.tenant_name || 'Unknown')"></span> |
+                        <span x-text="'Ended: ' + (selectedCall.ended_reason || 'unknown')"></span> |
+                        <span x-text="'VAPI Call ID: ' + (selectedCall.vapi_call_id || '')"></span>
+                    </div>
+                </div>
+            </template>
+        </div>
+        <form method="dialog" class="modal-backdrop">
+            <button @click="showModal = false">close</button>
+        </form>
+    </dialog>
+</div>
+
+<script>
+function callQuality() {
+    return {
+        calls: [],
+        stats: {},
+        loading: true,
+        startDate: '',
+        endDate: '',
+        selectedCallType: 'all',
+        showModal: false,
+        selectedCall: null,
+        detailCall: null,
+        currentUser: null,
+        evalRunning: false,
+        evalResult: '',
+        evalPollInterval: null,
+
+        async init() {
+            // Get current user
+            try {
+                const resp = await fetch('/admin/auth/me');
+                const data = await resp.json();
+                if (data.success) this.currentUser = data.user;
+            } catch(e) {}
+
+            // Default to this week
+            this.applyPreset('this_week', false);
+            await this.loadData();
+        },
+
+        applyPreset(preset, shouldLoad = true) {
+            const today = new Date();
+            const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+            const dow = today.getDay() || 7; // Sunday=0 → treat as 7
+
+            this.endDate = fmt(today);
+
+            switch(preset) {
+                case 'today':
+                    this.startDate = fmt(today);
+                    break;
+                case 'yesterday':
+                    const yesterday = new Date(today);
+                    yesterday.setDate(yesterday.getDate() - 1);
+                    this.startDate = fmt(yesterday);
+                    this.endDate = fmt(yesterday);
+                    break;
+                case 'this_week':
+                    const monday = new Date(today);
+                    monday.setDate(today.getDate() - dow + 1);
+                    this.startDate = fmt(monday);
+                    break;
+                case 'last_week':
+                    const lastMon = new Date(today);
+                    lastMon.setDate(today.getDate() - dow - 6);
+                    const lastSun = new Date(lastMon);
+                    lastSun.setDate(lastMon.getDate() + 6);
+                    this.startDate = fmt(lastMon);
+                    this.endDate = fmt(lastSun);
+                    break;
+                case 'this_month':
+                    this.startDate = fmt(new Date(today.getFullYear(), today.getMonth(), 1));
+                    break;
+            }
+
+            if (shouldLoad) this.loadData();
+        },
+
+        async loadData() {
+            this.loading = true;
+            try {
+                const params = new URLSearchParams();
+                if (this.startDate) params.set('start_date', this.startDate);
+                if (this.endDate) params.set('end_date', this.endDate);
+                if (this.selectedCallType !== 'all') params.set('call_type', this.selectedCallType);
+
+                const resp = await fetch(`/admin/call-quality/data?${params}`);
+                const data = await resp.json();
+
+                if (data.success) {
+                    this.calls = data.calls || [];
+                    this.stats = data.stats || {};
+                }
+            } catch(e) {
+                console.error('Failed to load call quality data:', e);
+            }
+            this.loading = false;
+        },
+
+        async showDetail(call) {
+            this.selectedCall = call;
+            this.detailCall = null;
+            this.showModal = true;
+
+            // Fetch full detail including transcript
+            try {
+                const resp = await fetch(`/admin/call-quality/${call.id}`);
+                const data = await resp.json();
+                if (data.success) {
+                    this.detailCall = data.call;
+                }
+            } catch(e) {
+                console.error('Failed to load call detail:', e);
+            }
+        },
+
+        formatDate(dt) {
+            if (!dt) return '-';
+            try {
+                const d = new Date(dt);
+                return d.toLocaleDateString('en-AU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+            } catch(e) { return dt; }
+        },
+
+        formatDuration(seconds) {
+            if (!seconds) return '-';
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.round(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        },
+
+        async runEvals() {
+            this.evalRunning = true;
+            this.evalResult = '';
+            try {
+                const resp = await fetch('/admin/learning-loop/run-evals', { method: 'POST' });
+                const data = await resp.json();
+
+                if (data.success) {
+                    const runId = data.run_id;
+                    this.evalPollInterval = setInterval(async () => {
+                        try {
+                            const statusResp = await fetch(`/admin/learning-loop/eval-status/${runId}`);
+                            const statusData = await statusResp.json();
+                            if (statusData.success && statusData.run) {
+                                if (statusData.run.status === 'completed') {
+                                    clearInterval(this.evalPollInterval);
+                                    this.evalRunning = false;
+                                    this.evalResult = `Evals complete: ${statusData.run.passed}/${statusData.run.total_evals} passed (${statusData.run.pass_rate}%)`;
+                                } else if (statusData.run.status === 'failed') {
+                                    clearInterval(this.evalPollInterval);
+                                    this.evalRunning = false;
+                                    this.evalResult = 'Eval run failed: ' + (statusData.run.error_message || 'Unknown error');
+                                }
+                            }
+                        } catch (err) {
+                            console.error('Poll error:', err);
+                        }
+                    }, 3000);
+                } else {
+                    this.evalRunning = false;
+                    this.evalResult = 'Failed to start: ' + (data.error || 'Unknown error');
+                }
+            } catch (err) {
+                this.evalRunning = false;
+                console.error('Failed to run evals:', err);
+            }
+        }
+    }
+}
+</script>
+{% endblock %}

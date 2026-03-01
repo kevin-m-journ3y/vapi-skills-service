@@ -1,0 +1,644 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Learning Loop{% endblock %}
+
+{% block content %}
+<div x-data="learningLoop()" x-init="init()">
+    <!-- Page Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold">Learning Loop</h1>
+            <p class="text-base-content/70 mt-1">Quality insights, eval results, and prompt change tracking</p>
+        </div>
+        <div class="flex gap-2">
+            <button class="btn btn-ghost btn-sm btn-circle" onclick="guide_modal.showModal()" title="How to use the Learning Loop">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+            </button>
+            <a href="/admin/call-quality" class="btn btn-outline btn-sm">View All Calls</a>
+        </div>
+    </div>
+
+    <!-- Guide Modal -->
+    <dialog id="guide_modal" class="modal">
+        <div class="modal-box max-w-3xl">
+            <form method="dialog">
+                <button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">X</button>
+            </form>
+            <h3 class="font-bold text-xl mb-4">How to Use the Learning Loop</h3>
+
+            <div class="space-y-4 text-sm">
+                <div>
+                    <h4 class="font-semibold text-base mb-1">What is the Learning Loop?</h4>
+                    <p class="text-base-content/80">The Learning Loop is how you make Jill better over time. Every call is automatically scored for quality (success, naturalness, repeated questions, filler phrases). This page shows you patterns across calls, lets you run automated tests, and tracks every prompt change so you can see what's working.</p>
+                </div>
+
+                <div class="divider my-2"></div>
+
+                <div>
+                    <h4 class="font-semibold text-base mb-1">Weekly Workflow</h4>
+                    <ol class="list-decimal list-inside space-y-2 text-base-content/80 ml-2">
+                        <li><strong>Check insights</strong> — Open this page on Monday. The stat cards show this week vs last week. Look for regressions (red deltas) and the alert cards below.</li>
+                        <li><strong>Investigate flagged calls</strong> — Click "View All Calls" to open the Call Quality page. Filter to the assistant with issues and read the transcripts of failed calls.</li>
+                        <li><strong>Identify the pattern</strong> — e.g. "users say 'half seven' and Jill doesn't understand", or "Jill asks for the site twice".</li>
+                        <li><strong>Fix the prompt</strong> — Edit the assistant prompt in code (e.g. <code>timesheet_prompt_v2.py</code>).</li>
+                        <li><strong>Push to VAPI</strong> — Run the update script with a summary:<br>
+                            <code class="bg-base-200 px-2 py-1 rounded text-xs">python scripts/update_timesheet_prompt.py --summary "Added half seven time parsing"</code><br>
+                            This updates VAPI and records the change in the Prompt Changes log below.</li>
+                        <li><strong>Run Evals</strong> — Click the "Run Evals" button to test all assistants against the eval suite (~60 seconds). Check that existing evals still pass and any new ones pass too.</li>
+                        <li><strong>Monitor next week</strong> — The insights will automatically show whether quality improved after your change.</li>
+                    </ol>
+                </div>
+
+                <div class="divider my-2"></div>
+
+                <div>
+                    <h4 class="font-semibold text-base mb-1">Page Sections Explained</h4>
+                    <div class="space-y-3 ml-2">
+                        <div>
+                            <span class="font-medium">Quality Insights</span>
+                            <p class="text-base-content/70">Stat cards comparing this period to the previous period. Success rate, naturalness score, and issue percentages. Alert cards highlight specific regressions or improvements. Recurring themes extract patterns from improvement notes.</p>
+                        </div>
+                        <div>
+                            <span class="font-medium">Quality Timeline</span>
+                            <p class="text-base-content/70">30-day bar chart showing daily success rate. Green = 80%+, yellow = 50-79%, red = below 50%. Purple dots mark prompt changes, green/red dots mark eval runs. Hover bars for details.</p>
+                        </div>
+                        <div>
+                            <span class="font-medium">Eval Suite</span>
+                            <p class="text-base-content/70">Run VAPI's automated eval tests against all assistants. Each eval simulates a call scenario and checks the outcome. Results show pass/fail per test with failure reasons. Run evals after every prompt change to catch regressions.</p>
+                        </div>
+                        <div>
+                            <span class="font-medium">Prompt Changes</span>
+                            <p class="text-base-content/70">Log of every prompt update pushed to VAPI. Recorded automatically when you use the update scripts with <code class="bg-base-200 px-1 rounded text-xs">--summary</code>. Helps correlate quality changes with specific prompt edits.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="divider my-2"></div>
+
+                <div>
+                    <h4 class="font-semibold text-base mb-1">When to Run Evals</h4>
+                    <ul class="list-disc list-inside space-y-1 text-base-content/80 ml-2">
+                        <li><strong>After every prompt change</strong> — Verify the change didn't break existing flows</li>
+                        <li><strong>After adding a new eval</strong> — Confirm the new test passes</li>
+                        <li><strong>Weekly check-in</strong> — Baseline pass rate tracking</li>
+                        <li><strong>Before deploying</strong> — Sanity check that everything still works</li>
+                    </ul>
+                </div>
+
+                <div class="divider my-2"></div>
+
+                <div>
+                    <h4 class="font-semibold text-base mb-1">What Are Evals?</h4>
+                    <p class="text-base-content/80">Evals (evaluations) are automated test scenarios for your voice assistants. Think of them like unit tests for Jill's conversations. Each eval defines:</p>
+                    <ul class="list-disc list-inside space-y-1 text-base-content/80 ml-2 mt-2">
+                        <li><strong>A scenario</strong> — a simulated caller with a specific goal (e.g. "Log a timesheet for Monday, 7am to 3pm at the Riverside site")</li>
+                        <li><strong>Success criteria</strong> — what Jill should do (e.g. correctly parse the times, confirm the site, save the entry)</li>
+                    </ul>
+                    <p class="text-base-content/80 mt-2">VAPI runs the scenario as a real conversation against your assistant, then checks whether the success criteria were met. The result is <span class="text-success font-medium">pass</span> or <span class="text-error font-medium">fail</span> with a reason.</p>
+                    <p class="text-base-content/80 mt-2">We currently have <strong>13 evals</strong>: 5 for the Greeter (authentication flows, routing) and 8 for Timesheet (time parsing, site matching, multi-entry, edge cases). Each eval run takes about 60 seconds as VAPI simulates real calls.</p>
+                </div>
+
+                <div class="divider my-2"></div>
+
+                <div>
+                    <h4 class="font-semibold text-base mb-1">Adding New Evals</h4>
+                    <p class="text-base-content/80">When you find a recurring failure pattern through the Learning Loop:</p>
+                    <ol class="list-decimal list-inside space-y-1 text-base-content/80 ml-2 mt-2">
+                        <li>Go to the <a href="https://dashboard.vapi.ai" target="_blank" class="link link-primary">VAPI Dashboard</a></li>
+                        <li>Open the relevant assistant (e.g. JSMB-Jill-timesheet)</li>
+                        <li>Navigate to the Evals tab</li>
+                        <li>Create a new eval with a scenario that reproduces the failure</li>
+                        <li>Come back here and click "Run Evals" to verify it passes after your prompt fix</li>
+                    </ol>
+                    <p class="text-base-content/80 mt-2"><strong>Good eval naming convention:</strong> <code class="bg-base-200 px-1 rounded text-xs">assistant_specific_scenario</code> — e.g. <code class="bg-base-200 px-1 rounded text-xs">timesheet_half_seven_time_parsing</code></p>
+                </div>
+
+                <div class="divider my-2"></div>
+
+                <div>
+                    <h4 class="font-semibold text-base mb-1">Call Quality Page vs Learning Loop</h4>
+                    <p class="text-base-content/80"><strong>Call Quality</strong> = individual call drill-down (read transcripts, see per-call scores).<br>
+                    <strong>Learning Loop</strong> = aggregate patterns, trends over time, eval tracking, prompt history. Start here, then drill into Call Quality when you spot an issue.</p>
+                </div>
+            </div>
+
+            <div class="modal-action">
+                <form method="dialog">
+                    <button class="btn">Close</button>
+                </form>
+            </div>
+        </div>
+        <form method="dialog" class="modal-backdrop"><button>close</button></form>
+    </dialog>
+
+    <!-- Filters -->
+    <div class="card bg-base-100 shadow mb-4">
+        <div class="card-body py-3">
+            <div class="flex flex-wrap gap-4 items-center">
+                <div>
+                    <span class="text-xs text-base-content/60 mr-1">Period:</span>
+                    <div class="inline-flex gap-1">
+                        <button class="btn btn-xs" :class="period === 'today' ? 'btn-active' : ''" @click="period = 'today'; reload()">Today</button>
+                        <button class="btn btn-xs" :class="period === 'this_week' ? 'btn-active' : ''" @click="period = 'this_week'; reload()">This Week</button>
+                        <button class="btn btn-xs" :class="period === 'this_month' ? 'btn-active' : ''" @click="period = 'this_month'; reload()">This Month</button>
+                    </div>
+                </div>
+                <div>
+                    <span class="text-xs text-base-content/60 mr-1">Assistant:</span>
+                    <div class="inline-flex gap-1">
+                        <button class="btn btn-xs" :class="assistant === '' ? 'btn-active' : ''" @click="assistant = ''; reload()">All</button>
+                        <button class="btn btn-xs" :class="assistant === 'greeter' ? 'btn-active' : ''" @click="assistant = 'greeter'; reload()">Greeter</button>
+                        <button class="btn btn-xs" :class="assistant === 'timesheet' ? 'btn-active' : ''" @click="assistant = 'timesheet'; reload()">Timesheet</button>
+                        <button class="btn btn-xs" :class="assistant === 'voice_notes' ? 'btn-active' : ''" @click="assistant = 'voice_notes'; reload()">Voice Notes</button>
+                        <button class="btn btn-xs" :class="assistant === 'site_progress' ? 'btn-active' : ''" @click="assistant = 'site_progress'; reload()">Site Progress</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- SECTION 1: INSIGHTS PANEL                    -->
+    <!-- ============================================ -->
+    <div class="mb-8">
+        <h2 class="text-lg font-semibold mb-3">Quality Insights</h2>
+
+        <!-- Stat cards with deltas -->
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+            <div class="stat bg-base-100 shadow rounded-lg p-3">
+                <div class="stat-title text-xs">Calls</div>
+                <div class="stat-value text-2xl" x-text="insights.current?.total || 0"></div>
+                <div class="stat-desc text-xs" x-show="insights.previous?.total > 0">
+                    prev: <span x-text="insights.previous?.total || 0"></span>
+                </div>
+            </div>
+            <div class="stat bg-base-100 shadow rounded-lg p-3">
+                <div class="stat-title text-xs">Success Rate</div>
+                <div class="stat-value text-2xl" :class="(insights.current?.success_rate || 0) >= 80 ? 'text-success' : (insights.current?.success_rate || 0) >= 50 ? 'text-warning' : 'text-error'">
+                    <span x-text="(insights.current?.success_rate || 0) + '%'"></span>
+                </div>
+                <div class="stat-desc text-xs" x-show="insights.deltas?.success_rate !== null">
+                    <span :class="insights.deltas?.success_rate > 0 ? 'text-success' : insights.deltas?.success_rate < 0 ? 'text-error' : ''"
+                          x-text="(insights.deltas?.success_rate > 0 ? '+' : '') + (insights.deltas?.success_rate || 0) + '%'"></span>
+                </div>
+            </div>
+            <div class="stat bg-base-100 shadow rounded-lg p-3">
+                <div class="stat-title text-xs">Avg Naturalness</div>
+                <div class="stat-value text-2xl" :class="(insights.current?.avg_naturalness || 0) >= 4 ? 'text-success' : (insights.current?.avg_naturalness || 0) >= 3 ? 'text-warning' : 'text-error'">
+                    <span x-text="(insights.current?.avg_naturalness || 0) + '/5'"></span>
+                </div>
+                <div class="stat-desc text-xs" x-show="insights.deltas?.avg_naturalness !== null">
+                    <span :class="insights.deltas?.avg_naturalness > 0 ? 'text-success' : insights.deltas?.avg_naturalness < 0 ? 'text-error' : ''"
+                          x-text="(insights.deltas?.avg_naturalness > 0 ? '+' : '') + (insights.deltas?.avg_naturalness || 0)"></span>
+                </div>
+            </div>
+            <div class="stat bg-base-100 shadow rounded-lg p-3">
+                <div class="stat-title text-xs">Repeated Q's</div>
+                <div class="stat-value text-2xl" :class="(insights.current?.repeated_pct || 0) > 20 ? 'text-error' : (insights.current?.repeated_pct || 0) > 0 ? 'text-warning' : 'text-success'">
+                    <span x-text="(insights.current?.repeated_pct || 0) + '%'"></span>
+                </div>
+                <div class="stat-desc text-xs" x-show="insights.deltas?.repeated_pct !== null">
+                    <span :class="insights.deltas?.repeated_pct < 0 ? 'text-success' : insights.deltas?.repeated_pct > 0 ? 'text-error' : ''"
+                          x-text="(insights.deltas?.repeated_pct > 0 ? '+' : '') + (insights.deltas?.repeated_pct || 0) + '%'"></span>
+                </div>
+            </div>
+            <div class="stat bg-base-100 shadow rounded-lg p-3">
+                <div class="stat-title text-xs">Filler Phrases</div>
+                <div class="stat-value text-2xl" :class="(insights.current?.filler_pct || 0) > 20 ? 'text-error' : (insights.current?.filler_pct || 0) > 0 ? 'text-warning' : 'text-success'">
+                    <span x-text="(insights.current?.filler_pct || 0) + '%'"></span>
+                </div>
+                <div class="stat-desc text-xs" x-show="insights.deltas?.filler_pct !== null">
+                    <span :class="insights.deltas?.filler_pct < 0 ? 'text-success' : insights.deltas?.filler_pct > 0 ? 'text-error' : ''"
+                          x-text="(insights.deltas?.filler_pct > 0 ? '+' : '') + (insights.deltas?.filler_pct || 0) + '%'"></span>
+                </div>
+            </div>
+            <div class="stat bg-base-100 shadow rounded-lg p-3">
+                <div class="stat-title text-xs">User Repeats</div>
+                <div class="stat-value text-2xl" :class="(insights.current?.user_repeat_pct || 0) > 20 ? 'text-error' : (insights.current?.user_repeat_pct || 0) > 0 ? 'text-warning' : 'text-success'">
+                    <span x-text="(insights.current?.user_repeat_pct || 0) + '%'"></span>
+                </div>
+                <div class="stat-desc text-xs" x-show="insights.deltas?.user_repeat_pct !== null">
+                    <span :class="insights.deltas?.user_repeat_pct < 0 ? 'text-success' : insights.deltas?.user_repeat_pct > 0 ? 'text-error' : ''"
+                          x-text="(insights.deltas?.user_repeat_pct > 0 ? '+' : '') + (insights.deltas?.user_repeat_pct || 0) + '%'"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Insight alert cards -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3" x-show="insights.insights?.length > 0">
+            <template x-for="insight in insights.insights" :key="insight.title">
+                <div class="alert shadow-sm"
+                     :class="insight.type === 'warning' ? 'alert-warning' : insight.type === 'improvement' ? 'alert-success' : 'alert-info'">
+                    <div>
+                        <svg x-show="insight.type === 'warning'" xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                        <svg x-show="insight.type === 'improvement'" xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                        <svg x-show="insight.type === 'info'" xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                        <div>
+                            <h3 class="font-bold text-sm" x-text="insight.title"></h3>
+                            <div class="text-xs" x-text="insight.detail"></div>
+                            <div class="text-xs opacity-70 mt-1" x-text="insight.recommendation"></div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <!-- No data state -->
+        <div class="alert alert-info" x-show="!loading && insights.current?.total === 0">
+            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+            <span>No call data for this period yet. Insights will appear as calls are logged.</span>
+        </div>
+
+        <!-- Themes -->
+        <div class="mt-4" x-show="Object.keys(insights.themes || {}).length > 0">
+            <h3 class="text-sm font-semibold mb-2">Recurring Themes</h3>
+            <div class="flex flex-wrap gap-2">
+                <template x-for="[theme, count] in Object.entries(insights.themes || {})" :key="theme">
+                    <span class="badge badge-outline gap-1">
+                        <span x-text="theme.replace(/_/g, ' ')"></span>
+                        <span class="badge badge-sm" x-text="count"></span>
+                    </span>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- SECTION 2: QUALITY TIMELINE                  -->
+    <!-- ============================================ -->
+    <div class="card bg-base-100 shadow mb-8">
+        <div class="card-body">
+            <h2 class="card-title text-lg">Quality Timeline (30 days)</h2>
+
+            <!-- Timeline chart -->
+            <div class="relative overflow-visible">
+                <div class="flex items-end gap-px" style="height: 160px; padding-top: 60px;">
+                    <template x-for="(day, idx) in timeline" :key="day.date">
+                        <div class="flex flex-col items-center relative group" style="width: 20px;">
+                            <!-- Tooltip -->
+                            <div class="tooltip tooltip-top" :data-tip="day.date + ' — ' + day.calls + ' call(s), ' + day.success_rate + '% success' + (day.avg_naturalness ? ', ' + day.avg_naturalness + '/5 natural' : '')">
+                                <!-- Bar (min 6px when calls exist so 0% success is still visible) -->
+                                <div class="w-3 rounded-t transition-all cursor-pointer"
+                                     :style="'height: ' + Math.max(day.success_rate * 1.4, 6) + 'px'"
+                                     :class="day.success_rate >= 80 ? 'bg-success' : day.success_rate >= 50 ? 'bg-warning' : 'bg-error'">
+                                </div>
+                            </div>
+                            <!-- Call count -->
+                            <div class="text-[7px] text-base-content/40 mt-0.5" x-text="day.calls"></div>
+                            <!-- Date label (every 5th) -->
+                            <div class="text-[8px] text-base-content/50 mt-1"
+                                 x-show="idx % 5 === 0"
+                                 x-text="day.date.slice(5)"></div>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- Prompt change markers -->
+                <div class="flex gap-px min-w-max mt-1" x-show="promptMarkers.length > 0">
+                    <template x-for="day in timeline" :key="'marker-' + day.date">
+                        <div style="width: 20px;" class="flex justify-center">
+                            <template x-if="promptMarkers.some(m => m.date === day.date)">
+                                <div class="w-2 h-2 bg-primary rounded-full cursor-pointer"
+                                     :title="promptMarkers.filter(m => m.date === day.date).map(m => m.summary || m.assistant).join(', ')">
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- Eval run dots -->
+                <div class="flex gap-px min-w-max mt-1" x-show="evalDots.length > 0">
+                    <template x-for="day in timeline" :key="'eval-' + day.date">
+                        <div style="width: 20px;" class="flex justify-center">
+                            <template x-if="evalDots.some(e => e.date === day.date)">
+                                <div class="w-2 h-2 rounded-full cursor-pointer"
+                                     :class="evalDots.find(e => e.date === day.date)?.pass_rate >= 80 ? 'bg-success' : 'bg-error'"
+                                     :title="evalDots.find(e => e.date === day.date)?.passed + '/' + evalDots.find(e => e.date === day.date)?.total + ' evals passed'">
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Legend -->
+            <div class="flex gap-4 text-xs text-base-content/60 mt-2">
+                <span class="flex items-center gap-1"><span class="w-3 h-3 bg-success rounded"></span> Success rate bars</span>
+                <span class="flex items-center gap-1"><span class="w-2 h-2 bg-primary rounded-full"></span> Prompt change</span>
+                <span class="flex items-center gap-1"><span class="w-2 h-2 bg-success rounded-full"></span> Eval pass</span>
+                <span class="flex items-center gap-1"><span class="w-2 h-2 bg-error rounded-full"></span> Eval fail</span>
+            </div>
+
+            <!-- Empty state -->
+            <div class="text-center text-base-content/50 py-8" x-show="timeline.length === 0 && !loading">
+                No timeline data yet. Data will appear as calls are processed.
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- SECTION 3: EVAL SUITE                        -->
+    <!-- ============================================ -->
+    <div class="card bg-base-100 shadow mb-8">
+        <div class="card-body">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="card-title text-lg">Eval Suite</h2>
+                <button class="btn btn-primary btn-sm" @click="runEvals()" :disabled="evalRunning">
+                    <template x-if="evalRunning">
+                        <span class="loading loading-spinner loading-xs"></span>
+                    </template>
+                    <span x-text="evalRunning ? 'Running...' : 'Run Evals'"></span>
+                </button>
+            </div>
+
+            <!-- Latest eval results grid -->
+            <div x-show="latestEvalRun">
+                <div class="flex items-center gap-3 mb-3">
+                    <div class="text-sm font-medium">Latest Run</div>
+                    <div class="badge" :class="latestEvalRun?.status === 'completed' ? 'badge-success' : latestEvalRun?.status === 'failed' ? 'badge-error' : 'badge-warning'"
+                         x-text="latestEvalRun?.status"></div>
+                    <div class="text-xs text-base-content/60" x-text="formatTimestamp(latestEvalRun?.run_timestamp)"></div>
+                    <div class="text-sm font-bold" x-show="latestEvalRun?.status === 'completed'"
+                         :class="latestEvalRun?.pass_rate >= 80 ? 'text-success' : 'text-error'">
+                        <span x-text="latestEvalRun?.passed + '/' + latestEvalRun?.total_evals + ' passed (' + latestEvalRun?.pass_rate + '%)'"></span>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2" x-show="latestEvalRun?.results">
+                    <template x-for="result in latestEvalRun?.results || []" :key="result.name">
+                        <div class="flex items-center gap-2 p-2 rounded bg-base-200">
+                            <span class="text-lg" x-text="result.status === 'pass' ? '&#x2713;' : '&#x2717;'"
+                                  :class="result.status === 'pass' ? 'text-success font-bold' : 'text-error font-bold'"></span>
+                            <div class="flex-1 min-w-0">
+                                <div class="text-xs font-mono truncate" x-text="result.name"></div>
+                                <div class="text-xs text-error truncate" x-show="result.failure_reason" x-text="result.failure_reason"></div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- Error message for failed runs -->
+                <div class="alert alert-error mt-2" x-show="latestEvalRun?.status === 'failed' && latestEvalRun?.error_message">
+                    <span class="text-sm" x-text="latestEvalRun?.error_message"></span>
+                </div>
+            </div>
+
+            <!-- No evals yet -->
+            <div class="text-center text-base-content/50 py-4" x-show="!latestEvalRun && !evalRunning">
+                No eval runs yet. Click "Run Evals" to test all assistants.
+            </div>
+
+            <!-- Run history -->
+            <div class="mt-6" x-show="evalRuns.length > 1">
+                <h3 class="text-sm font-semibold mb-2">Run History</h3>
+                <div class="overflow-x-auto">
+                    <table class="table table-xs">
+                        <thead>
+                            <tr>
+                                <th>When</th>
+                                <th>Triggered By</th>
+                                <th>Status</th>
+                                <th>Passed</th>
+                                <th>Failed</th>
+                                <th>Pass Rate</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="run in evalRuns" :key="run.id">
+                                <tr class="hover cursor-pointer" @click="latestEvalRun = run">
+                                    <td class="text-xs" x-text="formatTimestamp(run.run_timestamp)"></td>
+                                    <td><span class="badge badge-sm badge-ghost" x-text="run.triggered_by"></span></td>
+                                    <td>
+                                        <span class="badge badge-sm"
+                                              :class="run.status === 'completed' ? 'badge-success' : run.status === 'failed' ? 'badge-error' : 'badge-warning'"
+                                              x-text="run.status"></span>
+                                    </td>
+                                    <td class="text-success" x-text="run.passed || 0"></td>
+                                    <td class="text-error" x-text="run.failed || 0"></td>
+                                    <td>
+                                        <span :class="(run.pass_rate || 0) >= 80 ? 'text-success font-bold' : 'text-error font-bold'"
+                                              x-text="(run.pass_rate || 0) + '%'"></span>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- SECTION 4: PROMPT CHANGES LOG                -->
+    <!-- ============================================ -->
+    <div class="card bg-base-100 shadow mb-8">
+        <div class="card-body">
+            <h2 class="card-title text-lg">Prompt Changes</h2>
+
+            <div x-show="promptChanges.length > 0">
+                <div class="overflow-x-auto">
+                    <table class="table table-xs">
+                        <thead>
+                            <tr>
+                                <th>When</th>
+                                <th>Assistant</th>
+                                <th>What Changed</th>
+                                <th>Category</th>
+                                <th>By</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="change in promptChanges" :key="change.id">
+                                <tr>
+                                    <td class="text-xs whitespace-nowrap" x-text="formatTimestamp(change.pushed_at)"></td>
+                                    <td>
+                                        <span class="badge badge-sm badge-outline" x-text="formatAssistant(change.assistant_key)"></span>
+                                    </td>
+                                    <td class="text-sm" x-text="change.change_summary"></td>
+                                    <td><span class="badge badge-sm badge-ghost" x-text="change.change_category || 'prompt'"></span></td>
+                                    <td class="text-xs text-base-content/60" x-text="change.changed_by"></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="text-center text-base-content/50 py-4" x-show="promptChanges.length === 0 && !loading">
+                No prompt changes recorded yet. Changes will appear when you run update scripts with --summary.
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading overlay -->
+    <div class="fixed inset-0 bg-base-300/50 flex items-center justify-center z-50" x-show="loading" x-cloak>
+        <span class="loading loading-spinner loading-lg"></span>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function learningLoop() {
+    return {
+        loading: true,
+        period: 'this_week',
+        assistant: '',
+
+        // Insights
+        insights: {},
+
+        // Timeline
+        timeline: [],
+        evalDots: [],
+        promptMarkers: [],
+
+        // Evals
+        evalRunning: false,
+        evalRuns: [],
+        latestEvalRun: null,
+        evalPollInterval: null,
+
+        // Prompt changes
+        promptChanges: [],
+
+        async init() {
+            await Promise.all([
+                this.loadInsights(),
+                this.loadTimeline(),
+                this.loadEvalRuns(),
+                this.loadPromptChanges(),
+            ]);
+            this.loading = false;
+        },
+
+        async reload() {
+            await Promise.all([
+                this.loadInsights(),
+                this.loadTimeline(),
+            ]);
+        },
+
+        filterParams() {
+            const params = new URLSearchParams();
+            if (this.assistant) params.set('assistant', this.assistant);
+            return params.toString();
+        },
+
+        async loadInsights() {
+            try {
+                const extra = this.assistant ? `&assistant=${this.assistant}` : '';
+                const resp = await fetch(`/admin/learning-loop/insights?period=${this.period}${extra}`);
+                const data = await resp.json();
+                if (data.success) {
+                    this.insights = data;
+                }
+            } catch (err) {
+                console.error('Failed to load insights:', err);
+            }
+        },
+
+        async loadTimeline() {
+            try {
+                const extra = this.assistant ? `&assistant=${this.assistant}` : '';
+                const resp = await fetch(`/admin/learning-loop/timeline?days=30${extra}`);
+                const data = await resp.json();
+                if (data.success) {
+                    this.timeline = data.timeline || [];
+                    this.evalDots = data.eval_runs || [];
+                    this.promptMarkers = data.prompt_changes || [];
+                }
+            } catch (err) {
+                console.error('Failed to load timeline:', err);
+            }
+        },
+
+        async loadEvalRuns() {
+            try {
+                const resp = await fetch('/admin/learning-loop/eval-runs');
+                const data = await resp.json();
+                if (data.success) {
+                    this.evalRuns = data.runs || [];
+                    if (this.evalRuns.length > 0) {
+                        this.latestEvalRun = this.evalRuns[0];
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to load eval runs:', err);
+            }
+        },
+
+        async loadPromptChanges() {
+            try {
+                const resp = await fetch('/admin/learning-loop/prompt-changes');
+                const data = await resp.json();
+                if (data.success) {
+                    this.promptChanges = data.changes || [];
+                }
+            } catch (err) {
+                console.error('Failed to load prompt changes:', err);
+            }
+        },
+
+        async runEvals() {
+            this.evalRunning = true;
+            try {
+                const resp = await fetch('/admin/learning-loop/run-evals', { method: 'POST' });
+                const data = await resp.json();
+
+                if (data.success) {
+                    const runId = data.run_id;
+
+                    // Poll for completion
+                    this.evalPollInterval = setInterval(async () => {
+                        try {
+                            const statusResp = await fetch(`/admin/learning-loop/eval-status/${runId}`);
+                            const statusData = await statusResp.json();
+
+                            if (statusData.success && statusData.run) {
+                                if (statusData.run.status === 'completed' || statusData.run.status === 'failed') {
+                                    clearInterval(this.evalPollInterval);
+                                    this.evalRunning = false;
+                                    this.latestEvalRun = statusData.run;
+                                    // Refresh eval runs list and timeline
+                                    await this.loadEvalRuns();
+                                    await this.loadTimeline();
+                                }
+                            }
+                        } catch (err) {
+                            console.error('Poll error:', err);
+                        }
+                    }, 3000);
+                } else {
+                    this.evalRunning = false;
+                    alert('Failed to start eval run: ' + (data.error || 'Unknown error'));
+                }
+            } catch (err) {
+                this.evalRunning = false;
+                console.error('Failed to run evals:', err);
+            }
+        },
+
+        formatTimestamp(ts) {
+            if (!ts) return '';
+            const d = new Date(ts);
+            const now = new Date();
+            const diff = now - d;
+            const hours = Math.floor(diff / (1000 * 60 * 60));
+            const mins = Math.floor(diff / (1000 * 60));
+
+            if (mins < 1) return 'just now';
+            if (mins < 60) return mins + 'm ago';
+            if (hours < 24) return hours + 'h ago';
+
+            return d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+        },
+
+        formatAssistant(key) {
+            if (!key) return '';
+            return key.replace('JSMB-Jill-', '').replace(/-/g, ' ');
+        },
+    }
+}
+</script>
+{% endblock %}

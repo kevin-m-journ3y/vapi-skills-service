@@ -1,9 +1,12 @@
 # app/admin/routes.py - Admin UI routes
-from fastapi import APIRouter, Request, Depends, HTTPException, Header
+from fastapi import APIRouter, Request, Depends, HTTPException, Header, BackgroundTasks
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, RedirectResponse
 import httpx
 import os
+import hashlib
+import json
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import logging
 from dotenv import load_dotenv
@@ -1538,3 +1541,845 @@ async def voice_notes_report_page(request: Request, theme: Optional[str] = None)
         template,
         {"request": request, "page_title": "Voice Notes Reports"}
     )
+
+
+# ============================================
+# CALL QUALITY (Super Admin Only)
+# ============================================
+
+@router.get("/admin/call-quality", response_class=HTMLResponse)
+async def call_quality_page(request: Request):
+    """Call Quality dashboard page - super admin only"""
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    # Super admin only
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    return templates.TemplateResponse(
+        "reports/call_quality.html",
+        {"request": request, "page_title": "Call Quality"}
+    )
+
+
+@router.get("/admin/call-quality/data")
+async def get_call_quality_data(
+    request: Request,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    call_type: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+):
+    """Get call quality data - super admin only"""
+    user_session = await get_session_user(request)
+
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            # Build query params
+            params = {
+                "select": "id,vapi_call_id,tenant_id,user_id,call_type,caller_phone,"
+                          "call_duration_seconds,call_cost,ended_reason,summary,"
+                          "success_evaluation,task_completed,sites_logged,"
+                          "repeated_questions,filler_phrases_used,user_had_to_repeat,"
+                          "user_sentiment,naturalness_score,flow_steps_skipped,"
+                          "improvement_notes,call_started_at,call_ended_at",
+                "order": "call_started_at.desc",
+                "limit": "100"
+            }
+
+            if start_date:
+                params["call_started_at"] = f"gte.{start_date}T00:00:00Z"
+            if end_date:
+                params["call_started_at"] = f"lte.{end_date}T23:59:59Z"
+                if start_date:
+                    # Both dates - use and syntax
+                    params.pop("call_started_at")
+                    params["and"] = f"(call_started_at.gte.{start_date}T00:00:00Z,call_started_at.lte.{end_date}T23:59:59Z)"
+            if call_type and call_type != "all":
+                params["call_type"] = f"eq.{call_type}"
+            if tenant_id:
+                params["tenant_id"] = f"eq.{tenant_id}"
+
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/call_quality_assessments",
+                headers=headers,
+                params=params
+            )
+
+            if response.status_code != 200:
+                logger.error(f"Failed to fetch call quality data: {response.status_code} - {response.text}")
+                return {"success": False, "error": "Failed to fetch data"}
+
+            calls = response.json()
+
+            # Enrich with user names
+            user_ids = list(set(c.get("user_id") for c in calls if c.get("user_id")))
+            user_names = {}
+            if user_ids:
+                users_response = await client.get(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/users",
+                    headers=headers,
+                    params={
+                        "id": f"in.({','.join(user_ids)})",
+                        "select": "id,name"
+                    }
+                )
+                if users_response.status_code == 200:
+                    for u in users_response.json():
+                        user_names[u["id"]] = u["name"]
+
+            # Enrich with tenant names
+            tenant_ids = list(set(c.get("tenant_id") for c in calls if c.get("tenant_id")))
+            tenant_names = {}
+            if tenant_ids:
+                tenants_response = await client.get(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/tenants",
+                    headers=headers,
+                    params={
+                        "id": f"in.({','.join(tenant_ids)})",
+                        "select": "id,name"
+                    }
+                )
+                if tenants_response.status_code == 200:
+                    for t in tenants_response.json():
+                        tenant_names[t["id"]] = t["name"]
+
+            # Add names to calls
+            for c in calls:
+                c["user_name"] = user_names.get(c.get("user_id"), "Unknown")
+                c["tenant_name"] = tenant_names.get(c.get("tenant_id"), "Unknown")
+
+            # Calculate aggregate stats
+            total = len(calls)
+            successful = sum(1 for c in calls if c.get("success_evaluation") in ["true", True])
+            failed = sum(1 for c in calls if c.get("success_evaluation") in ["false", False])
+            avg_naturalness = 0
+            naturalness_calls = [c for c in calls if c.get("naturalness_score")]
+            if naturalness_calls:
+                avg_naturalness = sum(c["naturalness_score"] for c in naturalness_calls) / len(naturalness_calls)
+
+            repeated_q = sum(1 for c in calls if c.get("repeated_questions"))
+            filler_used = sum(1 for c in calls if c.get("filler_phrases_used"))
+            user_repeat = sum(1 for c in calls if c.get("user_had_to_repeat"))
+
+            sentiment_counts = {}
+            for c in calls:
+                s = c.get("user_sentiment", "unknown")
+                sentiment_counts[s] = sentiment_counts.get(s, 0) + 1
+
+            avg_duration = 0
+            duration_calls = [c for c in calls if c.get("call_duration_seconds")]
+            if duration_calls:
+                avg_duration = sum(c["call_duration_seconds"] for c in duration_calls) / len(duration_calls)
+
+            total_cost = sum(c.get("call_cost", 0) or 0 for c in calls)
+
+            return {
+                "success": True,
+                "calls": calls,
+                "stats": {
+                    "total_calls": total,
+                    "successful": successful,
+                    "failed": failed,
+                    "success_rate": round(successful / total * 100, 1) if total > 0 else 0,
+                    "avg_naturalness": round(avg_naturalness, 1),
+                    "repeated_questions_count": repeated_q,
+                    "filler_phrases_count": filler_used,
+                    "user_had_to_repeat_count": user_repeat,
+                    "sentiment_counts": sentiment_counts,
+                    "avg_duration_seconds": round(avg_duration, 1),
+                    "total_cost": round(total_cost, 4),
+                }
+            }
+
+    except Exception as e:
+        logger.error(f"Error fetching call quality data: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/admin/call-quality/{call_id}")
+async def get_call_quality_detail(request: Request, call_id: str):
+    """Get detailed call quality data for a single call - super admin only"""
+    user_session = await get_session_user(request)
+
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/call_quality_assessments",
+                headers=headers,
+                params={
+                    "id": f"eq.{call_id}",
+                    "select": "*"
+                }
+            )
+
+            if response.status_code != 200 or not response.json():
+                return {"success": False, "error": "Call not found"}
+
+            call = response.json()[0]
+
+            # Enrich with user name
+            if call.get("user_id"):
+                user_resp = await client.get(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/users",
+                    headers=headers,
+                    params={
+                        "id": f"eq.{call['user_id']}",
+                        "select": "name"
+                    }
+                )
+                if user_resp.status_code == 200 and user_resp.json():
+                    call["user_name"] = user_resp.json()[0]["name"]
+
+            # Enrich with tenant name
+            if call.get("tenant_id"):
+                tenant_resp = await client.get(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/tenants",
+                    headers=headers,
+                    params={
+                        "id": f"eq.{call['tenant_id']}",
+                        "select": "name"
+                    }
+                )
+                if tenant_resp.status_code == 200 and tenant_resp.json():
+                    call["tenant_name"] = tenant_resp.json()[0]["name"]
+
+            return {"success": True, "call": call}
+
+    except Exception as e:
+        logger.error(f"Error fetching call quality detail: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# ============================================
+# LEARNING LOOP (Super Admin Only)
+# ============================================
+
+@router.get("/admin/learning-loop", response_class=HTMLResponse)
+async def learning_loop_page(request: Request):
+    """Learning Loop dashboard - super admin only"""
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    return templates.TemplateResponse(
+        "reports/learning_loop.html",
+        {"request": request, "page_title": "Learning Loop"}
+    )
+
+
+@router.get("/admin/learning-loop/insights")
+async def get_learning_loop_insights(
+    request: Request,
+    period: str = "this_week",
+    assistant: str = None,
+):
+    """Get quality insights with period-over-period comparison"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    try:
+        now = datetime.now(timezone.utc)
+
+        # Calculate date ranges
+        if period == "today":
+            current_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            prev_start = current_start - timedelta(days=1)
+            prev_end = current_start
+        elif period == "this_week":
+            days_since_monday = now.weekday()
+            current_start = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+            prev_start = current_start - timedelta(weeks=1)
+            prev_end = current_start
+        elif period == "this_month":
+            current_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            prev_start = (current_start - timedelta(days=1)).replace(day=1)
+            prev_end = current_start
+        else:
+            current_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+            prev_start = current_start - timedelta(weeks=1)
+            prev_end = current_start
+
+        current_end = now
+
+        # Build assistant filter clause
+        assistant_filter = f",call_type.eq.{assistant}" if assistant else ""
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            # Fetch current period calls
+            current_params = {
+                "select": "success_evaluation,naturalness_score,repeated_questions,"
+                          "filler_phrases_used,user_had_to_repeat,user_sentiment,"
+                          "improvement_notes,call_type",
+                "and": f"(call_started_at.gte.{current_start.isoformat()},call_started_at.lte.{current_end.isoformat()}{assistant_filter})",
+                "order": "call_started_at.desc"
+            }
+
+            current_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/call_quality_assessments",
+                headers=headers,
+                params=current_params
+            )
+
+            # Fetch previous period calls
+            prev_params = {
+                "select": "success_evaluation,naturalness_score,repeated_questions,"
+                          "filler_phrases_used,user_had_to_repeat,user_sentiment,"
+                          "improvement_notes,call_type",
+                "and": f"(call_started_at.gte.{prev_start.isoformat()},call_started_at.lte.{prev_end.isoformat()}{assistant_filter})",
+                "order": "call_started_at.desc"
+            }
+
+            prev_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/call_quality_assessments",
+                headers=headers,
+                params=prev_params
+            )
+
+            # Fetch recent prompt changes
+            prompt_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/prompt_changes",
+                headers=headers,
+                params={
+                    "select": "assistant_key,change_summary,pushed_at",
+                    "pushed_at": f"gte.{prev_start.isoformat()}",
+                    "order": "pushed_at.desc",
+                    "limit": "10"
+                }
+            )
+
+            current_calls = current_resp.json() if current_resp.status_code == 200 else []
+            prev_calls = prev_resp.json() if prev_resp.status_code == 200 else []
+            recent_prompt_changes = prompt_resp.json() if prompt_resp.status_code == 200 else []
+
+        # Compute metrics for each period
+        def compute_metrics(calls):
+            total = len(calls)
+            if total == 0:
+                return {"total": 0, "success_rate": 0, "avg_naturalness": 0,
+                        "repeated_pct": 0, "filler_pct": 0, "user_repeat_pct": 0}
+
+            successful = sum(1 for c in calls if c.get("success_evaluation") in ["true", True])
+            nat_scores = [c["naturalness_score"] for c in calls if c.get("naturalness_score")]
+            avg_nat = sum(nat_scores) / len(nat_scores) if nat_scores else 0
+            repeated = sum(1 for c in calls if c.get("repeated_questions"))
+            filler = sum(1 for c in calls if c.get("filler_phrases_used"))
+            user_repeat = sum(1 for c in calls if c.get("user_had_to_repeat"))
+
+            return {
+                "total": total,
+                "success_rate": round(successful / total * 100, 1),
+                "avg_naturalness": round(avg_nat, 1),
+                "repeated_pct": round(repeated / total * 100, 1),
+                "filler_pct": round(filler / total * 100, 1),
+                "user_repeat_pct": round(user_repeat / total * 100, 1),
+            }
+
+        current_metrics = compute_metrics(current_calls)
+        prev_metrics = compute_metrics(prev_calls)
+
+        # Compute deltas
+        def delta(current_val, prev_val):
+            if prev_val == 0:
+                return None
+            return round(current_val - prev_val, 1)
+
+        deltas = {
+            "success_rate": delta(current_metrics["success_rate"], prev_metrics["success_rate"]),
+            "avg_naturalness": delta(current_metrics["avg_naturalness"], prev_metrics["avg_naturalness"]),
+            "repeated_pct": delta(current_metrics["repeated_pct"], prev_metrics["repeated_pct"]),
+            "filler_pct": delta(current_metrics["filler_pct"], prev_metrics["filler_pct"]),
+            "user_repeat_pct": delta(current_metrics["user_repeat_pct"], prev_metrics["user_repeat_pct"]),
+        }
+
+        # Generate insight cards
+        insights = []
+
+        # Check for regressions
+        if deltas["success_rate"] is not None and deltas["success_rate"] < -10:
+            insights.append({
+                "type": "warning",
+                "title": "Success rate dropped",
+                "detail": f"Down {abs(deltas['success_rate'])}% from last period ({prev_metrics['success_rate']}% → {current_metrics['success_rate']}%)",
+                "recommendation": "Review failed calls in Call Quality for common patterns"
+            })
+
+        if deltas["repeated_pct"] is not None and deltas["repeated_pct"] > 10:
+            insights.append({
+                "type": "warning",
+                "title": "More repeated questions",
+                "detail": f"Up {deltas['repeated_pct']}% — Jill is asking the same question more often",
+                "recommendation": "Check if STT confidence is low on certain phrases"
+            })
+
+        if deltas["filler_pct"] is not None and deltas["filler_pct"] > 10:
+            insights.append({
+                "type": "warning",
+                "title": "More filler phrases",
+                "detail": f"Up {deltas['filler_pct']}% — Jill is saying 'hold on', 'one moment', etc.",
+                "recommendation": "Review prompt instructions about staying silent during tool calls"
+            })
+
+        # Check for improvements
+        if deltas["success_rate"] is not None and deltas["success_rate"] > 5:
+            insights.append({
+                "type": "improvement",
+                "title": "Success rate improved",
+                "detail": f"Up {deltas['success_rate']}% ({prev_metrics['success_rate']}% → {current_metrics['success_rate']}%)",
+                "recommendation": "Great progress — keep monitoring"
+            })
+
+        if deltas["avg_naturalness"] is not None and deltas["avg_naturalness"] > 0.3:
+            insights.append({
+                "type": "improvement",
+                "title": "Naturalness improving",
+                "detail": f"Score up {deltas['avg_naturalness']} ({prev_metrics['avg_naturalness']} → {current_metrics['avg_naturalness']})",
+                "recommendation": "Prompt changes are having a positive effect"
+            })
+
+        # Correlate with prompt changes
+        if recent_prompt_changes and deltas["success_rate"] is not None:
+            direction = "improved" if deltas["success_rate"] > 0 else "changed"
+            insights.append({
+                "type": "info",
+                "title": f"{len(recent_prompt_changes)} prompt change(s) recently",
+                "detail": f"Quality has {direction} since — may be related",
+                "recommendation": "Compare before/after in the timeline below"
+            })
+
+        # Extract themes from improvement notes
+        themes = {}
+        theme_keywords = {
+            "time_parsing": ["time parsing", "half seven", "quarter past", "o'clock", "parse time", "time format"],
+            "site_recognition": ["wrong site", "didn't recognise", "couldn't find site", "site not found", "site name"],
+            "filler_phrases": ["hold on", "one moment", "just a sec", "filler phrase", "filler"],
+            "repeated_questions": ["repeated", "asked again", "same question", "re-asked"],
+            "flow_steps": ["skipped", "didn't ask", "missed step", "readback", "confirmation step"],
+        }
+
+        for call in current_calls:
+            notes = (call.get("improvement_notes") or "").lower()
+            if not notes or notes == "none":
+                continue
+            for theme, keywords in theme_keywords.items():
+                if any(kw.lower() in notes for kw in keywords):
+                    themes[theme] = themes.get(theme, 0) + 1
+
+        return {
+            "success": True,
+            "period": period,
+            "current": current_metrics,
+            "previous": prev_metrics,
+            "deltas": deltas,
+            "insights": insights,
+            "themes": themes,
+            "recent_prompt_changes": recent_prompt_changes,
+        }
+
+    except Exception as e:
+        logger.error(f"Error computing insights: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/admin/learning-loop/timeline")
+async def get_learning_loop_timeline(
+    request: Request,
+    days: int = 30,
+    assistant: str = None,
+):
+    """Get daily quality timeline with eval runs and prompt changes"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    try:
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            # Fetch calls for the period
+            calls_params = {
+                "select": "call_started_at,success_evaluation,naturalness_score",
+                "call_started_at": f"gte.{start_date.isoformat()}",
+                "order": "call_started_at.asc"
+            }
+            if assistant:
+                calls_params["call_type"] = f"eq.{assistant}"
+
+            calls_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/call_quality_assessments",
+                headers=headers,
+                params=calls_params
+            )
+
+            # Fetch eval runs for the period
+            evals_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/eval_runs",
+                headers=headers,
+                params={
+                    "select": "run_timestamp,pass_rate,status,total_evals,passed,failed",
+                    "run_timestamp": f"gte.{start_date.isoformat()}",
+                    "order": "run_timestamp.asc"
+                }
+            )
+
+            # Fetch prompt changes for the period
+            prompts_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/prompt_changes",
+                headers=headers,
+                params={
+                    "select": "pushed_at,assistant_key,change_summary",
+                    "pushed_at": f"gte.{start_date.isoformat()}",
+                    "order": "pushed_at.asc"
+                }
+            )
+
+            calls = calls_resp.json() if calls_resp.status_code == 200 else []
+            eval_runs = evals_resp.json() if evals_resp.status_code == 200 else []
+            prompt_changes = prompts_resp.json() if prompts_resp.status_code == 200 else []
+
+        # Group calls by day
+        daily = {}
+        for call in calls:
+            day = call.get("call_started_at", "")[:10]  # YYYY-MM-DD
+            if day not in daily:
+                daily[day] = {"calls": 0, "successful": 0, "naturalness_scores": []}
+            daily[day]["calls"] += 1
+            if call.get("success_evaluation") in ["true", True]:
+                daily[day]["successful"] += 1
+            if call.get("naturalness_score"):
+                daily[day]["naturalness_scores"].append(call["naturalness_score"])
+
+        # Build timeline data
+        timeline = []
+        for day_str, data in sorted(daily.items()):
+            total = data["calls"]
+            timeline.append({
+                "date": day_str,
+                "calls": total,
+                "success_rate": round(data["successful"] / total * 100, 1) if total > 0 else 0,
+                "avg_naturalness": round(sum(data["naturalness_scores"]) / len(data["naturalness_scores"]), 1) if data["naturalness_scores"] else None,
+            })
+
+        # Map eval runs to dates
+        eval_run_dots = []
+        for run in eval_runs:
+            if run.get("status") == "completed":
+                eval_run_dots.append({
+                    "date": run["run_timestamp"][:10],
+                    "pass_rate": run.get("pass_rate"),
+                    "total": run.get("total_evals"),
+                    "passed": run.get("passed"),
+                })
+
+        # Map prompt changes to dates
+        prompt_markers = []
+        for change in prompt_changes:
+            prompt_markers.append({
+                "date": change["pushed_at"][:10],
+                "assistant": change.get("assistant_key"),
+                "summary": change.get("change_summary"),
+            })
+
+        return {
+            "success": True,
+            "timeline": timeline,
+            "eval_runs": eval_run_dots,
+            "prompt_changes": prompt_markers,
+        }
+
+    except Exception as e:
+        logger.error(f"Error computing timeline: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/admin/learning-loop/run-evals")
+async def run_evals(
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    """Trigger eval suite run in background"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            # Create eval_run record with status=running
+            run_record = {
+                "status": "running",
+                "triggered_by": "dashboard",
+            }
+
+            response = await client.post(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/eval_runs",
+                headers={**headers, "Content-Type": "application/json", "Prefer": "return=representation"},
+                json=run_record
+            )
+
+            if response.status_code != 201:
+                return {"success": False, "error": "Failed to create eval run record"}
+
+            run_data = response.json()
+            run_id = run_data[0]["id"] if isinstance(run_data, list) else run_data["id"]
+
+        # Run evals in background
+        background_tasks.add_task(_execute_eval_run, run_id)
+
+        return {"success": True, "run_id": run_id, "status": "running"}
+
+    except Exception as e:
+        logger.error(f"Error starting eval run: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def _execute_eval_run(run_id: str):
+    """Background task to execute eval suite and store results"""
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+    try:
+        from scripts.vapi_evals.eval_runner import VAPIEvalsRunner
+        from scripts.vapi_evals.eval_definitions import GREETER_EVALS, TIMESHEET_EVALS
+
+        runner = VAPIEvalsRunner()
+        await runner.get_assistants()
+
+        existing = await runner.list_evals()
+        eval_map = {e.get("name"): e.get("id") for e in existing}
+
+        results = []
+        passed = 0
+        failed = 0
+
+        # Build list of evals to run
+        evals_to_run = []
+        for eval_def in GREETER_EVALS:
+            if eval_def["name"] in eval_map:
+                evals_to_run.append({
+                    "name": eval_def["name"],
+                    "eval_id": eval_map[eval_def["name"]],
+                    "assistant_id": runner.assistant_ids.get("greeter"),
+                })
+        for eval_def in TIMESHEET_EVALS:
+            if eval_def["name"] in eval_map:
+                evals_to_run.append({
+                    "name": eval_def["name"],
+                    "eval_id": eval_map[eval_def["name"]],
+                    "assistant_id": runner.assistant_ids.get("timesheet"),
+                })
+
+        for eval_info in evals_to_run:
+            result = await runner.run_eval(
+                eval_info["eval_id"],
+                eval_info["name"],
+                eval_info["assistant_id"]
+            )
+
+            # Extract failure reason
+            failure_reason = None
+            if result.get("status") == "fail":
+                for r in result.get("results", []):
+                    judge = r.get("judge", {})
+                    if judge.get("status") == "fail":
+                        failure_reason = judge.get("failureReason", "Unknown")[:200]
+                        break
+
+            results.append({
+                "name": result["name"],
+                "status": result["status"],
+                "failure_reason": failure_reason,
+                "run_id": result.get("run_id"),
+            })
+
+            if result["status"] == "pass":
+                passed += 1
+            else:
+                failed += 1
+
+        total = len(results)
+        pass_rate = round(passed / total * 100, 1) if total > 0 else 0
+
+        # Update the eval_run record
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal"
+            }
+
+            await client.patch(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/eval_runs",
+                headers=headers,
+                params={"id": f"eq.{run_id}"},
+                json={
+                    "status": "completed",
+                    "total_evals": total,
+                    "passed": passed,
+                    "failed": failed,
+                    "pass_rate": pass_rate,
+                    "results": results,
+                }
+            )
+
+        logger.info(f"Eval run {run_id} completed: {passed}/{total} passed ({pass_rate}%)")
+
+    except Exception as e:
+        logger.error(f"Eval run {run_id} failed: {e}")
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                headers = {
+                    "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal"
+                }
+                await client.patch(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/eval_runs",
+                    headers=headers,
+                    params={"id": f"eq.{run_id}"},
+                    json={
+                        "status": "failed",
+                        "error_message": str(e)[:500],
+                    }
+                )
+        except Exception:
+            pass
+
+
+@router.get("/admin/learning-loop/eval-status/{run_id}")
+async def get_eval_status(request: Request, run_id: str):
+    """Poll for eval run status"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/eval_runs",
+                headers=headers,
+                params={
+                    "id": f"eq.{run_id}",
+                    "select": "*"
+                }
+            )
+
+            if response.status_code != 200 or not response.json():
+                return {"success": False, "error": "Run not found"}
+
+            run = response.json()[0]
+            return {"success": True, "run": run}
+
+    except Exception as e:
+        logger.error(f"Error fetching eval status: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/admin/learning-loop/eval-runs")
+async def get_eval_runs(request: Request):
+    """Get history of eval runs"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/eval_runs",
+                headers=headers,
+                params={
+                    "select": "*",
+                    "order": "run_timestamp.desc",
+                    "limit": "20"
+                }
+            )
+
+            if response.status_code != 200:
+                return {"success": False, "error": "Failed to fetch eval runs"}
+
+            return {"success": True, "runs": response.json()}
+
+    except Exception as e:
+        logger.error(f"Error fetching eval runs: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/admin/learning-loop/prompt-changes")
+async def get_prompt_changes(request: Request):
+    """Get history of prompt changes"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/prompt_changes",
+                headers=headers,
+                params={
+                    "select": "*",
+                    "order": "pushed_at.desc",
+                    "limit": "50"
+                }
+            )
+
+            if response.status_code != 200:
+                return {"success": False, "error": "Failed to fetch prompt changes"}
+
+            return {"success": True, "changes": response.json()}
+
+    except Exception as e:
+        logger.error(f"Error fetching prompt changes: {e}")
+        return {"success": False, "error": str(e)}

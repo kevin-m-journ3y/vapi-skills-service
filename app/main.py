@@ -349,8 +349,8 @@ async def get_system_status():
 @app.post("/api/v1/vapi/end-of-call-report")
 async def handle_end_of_call_report(request: Request):
     """
-    Handle end-of-call report from VAPI with full transcript
-    This stores the complete call transcript in the database
+    Handle end-of-call report from VAPI with full transcript and call quality analysis.
+    Stores transcript in activity tables and quality assessment in call_quality_assessments.
     """
     logger.info("=== END OF CALL REPORT RECEIVED ===")
 
@@ -403,9 +403,53 @@ async def handle_end_of_call_report(request: Request):
                     else:
                         logger.warning(f"Unknown role '{role}' with content: {content[:50]}")
 
+        # Extract analysis data from VAPI
+        analysis = call.get("analysis", {})
+        structured_data = analysis.get("structuredData", {})
+
+        # Determine call type and assistant from messages
+        call_type = None
+        assistant_name = None
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_content = msg.get("content", "") or msg.get("message", "")
+                if "timesheet" in system_content.lower():
+                    call_type = "timesheet"
+                elif "voice note" in system_content.lower():
+                    call_type = "voice_notes"
+                elif "site update" in system_content.lower() or "site progress" in system_content.lower():
+                    call_type = "site_updates"
+                elif "authenticate" in system_content.lower() or "greeter" in system_content.lower():
+                    call_type = "greeter"
+
+        # Look up tenant_id and user_id from the authenticate_caller result in messages
+        tenant_id = None
+        user_id = None
+        caller_phone = call.get("customer", {}).get("number")
+        for msg in messages:
+            if msg.get("role") == "tool_call_result" and msg.get("name", "").endswith("authenticate_caller"):
+                result = msg.get("result", {})
+                if isinstance(result, dict):
+                    tenant_id = result.get("tenant_id")
+                    user_id = result.get("user_id")
+                break
+
+        # Calculate duration
+        duration_seconds = None
+        started_at = call.get("startedAt")
+        ended_at = call.get("endedAt")
+        if started_at and ended_at:
+            try:
+                from datetime import datetime
+                start_dt = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+                end_dt = datetime.fromisoformat(ended_at.replace("Z", "+00:00"))
+                duration_seconds = (end_dt - start_dt).total_seconds()
+            except Exception:
+                pass
+
         # Update tables with full transcript
         async with httpx.AsyncClient() as client:
-            logger.info(f"Updating site_progress_updates and voice_notes with transcript for call {call_id}")
+            logger.info(f"Updating tables with transcript for call {call_id}")
 
             # Update any site_progress_updates with the real transcript
             update_response = await client.patch(
@@ -454,6 +498,62 @@ async def handle_end_of_call_report(request: Request):
 
             if ts_response.status_code in [200, 204]:
                 logger.info(f"✓ Updated timesheets with call transcript for call {call_id}")
+
+            # Store call quality assessment
+            quality_record = {
+                "vapi_call_id": call_id,
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "call_type": call_type,
+                "caller_phone": caller_phone,
+                "call_duration_seconds": duration_seconds,
+                "call_cost": call.get("cost"),
+                "ended_reason": call.get("endedReason"),
+                "assistant_name": call_type,  # Will be enriched by analysisPlan
+                "summary": analysis.get("summary"),
+                "success_evaluation": analysis.get("successEvaluation"),
+                "task_completed": structured_data.get("task_completed") if structured_data else None,
+                "sites_logged": structured_data.get("sites_logged") if structured_data else None,
+                "repeated_questions": structured_data.get("repeated_questions") if structured_data else None,
+                "filler_phrases_used": structured_data.get("filler_phrases_used") if structured_data else None,
+                "user_had_to_repeat": structured_data.get("user_had_to_repeat") if structured_data else None,
+                "user_sentiment": structured_data.get("user_sentiment") if structured_data else None,
+                "naturalness_score": structured_data.get("naturalness_score") if structured_data else None,
+                "flow_steps_skipped": structured_data.get("flow_steps_skipped") if structured_data else None,
+                "improvement_notes": structured_data.get("improvement_notes") if structured_data else None,
+                "transcript": full_transcript or transcript_data,
+                "structured_data": structured_data if structured_data else None,
+                "call_started_at": started_at,
+                "call_ended_at": ended_at,
+            }
+
+            # Remove None values to avoid Supabase issues
+            quality_record = {k: v for k, v in quality_record.items() if v is not None}
+
+            # Convert flow_steps_skipped list to Postgres array format
+            if "flow_steps_skipped" in quality_record and isinstance(quality_record["flow_steps_skipped"], list):
+                quality_record["flow_steps_skipped"] = "{" + ",".join(f'"{s}"' for s in quality_record["flow_steps_skipped"]) + "}"
+
+            # Convert structured_data dict to JSON string for JSONB column
+            import json as json_module
+            if "structured_data" in quality_record and isinstance(quality_record["structured_data"], dict):
+                quality_record["structured_data"] = json_module.dumps(quality_record["structured_data"])
+
+            qa_response = await client.post(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/call_quality_assessments",
+                headers={
+                    "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal"
+                },
+                json=quality_record
+            )
+
+            if qa_response.status_code in [200, 201, 204]:
+                logger.info(f"✓ Stored call quality assessment for call {call_id}")
+            else:
+                logger.warning(f"Failed to store call quality assessment: {qa_response.status_code} - {qa_response.text}")
 
             return {"success": True}
 
