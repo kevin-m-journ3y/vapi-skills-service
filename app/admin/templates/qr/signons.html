@@ -206,7 +206,8 @@ function signonsReport() {
                 this.dateFrom = this.localDateStr(today);
             } else if (preset === 'week') {
                 const monday = new Date(today);
-                monday.setDate(today.getDate() - today.getDay() + 1);
+                const dow = today.getDay() || 7; // Sunday=0 → treat as 7
+                monday.setDate(today.getDate() - dow + 1);
                 this.dateFrom = this.localDateStr(monday);
             } else if (preset === 'month') {
                 const first = new Date(today.getFullYear(), today.getMonth(), 1);
