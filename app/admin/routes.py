@@ -2175,7 +2175,7 @@ async def _execute_eval_run(run_id: str):
 
     try:
         from scripts.vapi_evals.eval_runner import VAPIEvalsRunner
-        from scripts.vapi_evals.eval_definitions import GREETER_EVALS, TIMESHEET_EVALS
+        from scripts.vapi_evals.eval_definitions import GREETER_EVALS, TIMESHEET_EVALS, FLOW_EVALS
 
         runner = VAPIEvalsRunner()
         await runner.get_assistants()
@@ -2203,6 +2203,13 @@ async def _execute_eval_run(run_id: str):
                     "eval_id": eval_map[eval_def["name"]],
                     "assistant_id": runner.assistant_ids.get("timesheet"),
                 })
+        for eval_def in FLOW_EVALS:
+            if eval_def["name"] in eval_map:
+                evals_to_run.append({
+                    "name": eval_def["name"],
+                    "eval_id": eval_map[eval_def["name"]],
+                    "assistant_id": runner.assistant_ids.get("timesheet"),
+                })
 
         for eval_info in evals_to_run:
             result = await runner.run_eval(
@@ -2211,13 +2218,16 @@ async def _execute_eval_run(run_id: str):
                 eval_info["assistant_id"]
             )
 
-            # Extract failure reason
+            # Extract failure reason from nested messages
             failure_reason = None
             if result.get("status") == "fail":
                 for r in result.get("results", []):
-                    judge = r.get("judge", {})
-                    if judge.get("status") == "fail":
-                        failure_reason = judge.get("failureReason", "Unknown")[:200]
+                    for msg in r.get("messages", []):
+                        judge = msg.get("judge", {})
+                        if judge.get("status") == "fail":
+                            failure_reason = judge.get("failureReason", "Unknown")[:200]
+                            break
+                    if failure_reason:
                         break
 
             results.append({
