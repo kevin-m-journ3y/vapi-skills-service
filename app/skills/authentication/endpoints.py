@@ -272,7 +272,7 @@ async def authenticate_by_phone(request: dict):
                     "tenant_id": f"eq.{user['tenant_id']}",
                     "status": "in.(active,signed_off)",
                     "and": f"(signed_on_at.gte.{today_start.isoformat()},signed_on_at.lte.{today_end.isoformat()})",
-                    "select": "id,site_id,signed_on_at,status",
+                    "select": "id,site_id,signed_on_at,signed_off_at,signoff_method,timesheet_id,status",
                     "order": "signed_on_at.asc",
                 }
             )
@@ -286,13 +286,20 @@ async def authenticate_by_phone(request: dict):
                     signed_on_dt = datetime.fromisoformat(s["signed_on_at"].replace("Z", "+00:00"))
                     signed_on_local = signed_on_dt.astimezone(tenant_tz)
                     time_str = signed_on_local.strftime("%-I:%M %p").lower()
-                    todays_signons.append({
+                    signon_entry = {
                         "signon_id": s["id"],
                         "site_id": s["site_id"],
                         "site_name": site_name_map.get(s["site_id"], "Unknown site"),
                         "signed_on_time": time_str,
                         "status": s["status"],
-                    })
+                        "signoff_method": s.get("signoff_method"),
+                        "timesheet_id": s.get("timesheet_id"),
+                    }
+                    if s.get("signed_off_at"):
+                        signed_off_dt = datetime.fromisoformat(s["signed_off_at"].replace("Z", "+00:00"))
+                        signed_off_local = signed_off_dt.astimezone(tenant_tz)
+                        signon_entry["signed_off_time"] = signed_off_local.strftime("%-I:%M %p").lower()
+                    todays_signons.append(signon_entry)
 
             if todays_signons:
                 logger.info(f"Found {len(todays_signons)} QR sign-on(s) today for {user['name']}")

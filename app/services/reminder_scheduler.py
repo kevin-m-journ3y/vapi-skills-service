@@ -89,7 +89,11 @@ async def _get_enabled_tenants() -> list:
 
 
 async def _find_users_needing_reminder(tenant_id: str, timezone_str: str) -> list:
-    """Find enrolled users who signed on today but have no timesheet entry."""
+    """Find enrolled users who signed on today but have unlogged sites.
+
+    Checks per-site completeness: a user needs a reminder if they have
+    sign-on sites without matching timesheet entries (not just zero timesheets).
+    """
     tz = ZoneInfo(timezone_str)
     now_local = datetime.now(tz)
     today = now_local.date()
@@ -100,40 +104,56 @@ async def _find_users_needing_reminder(tenant_id: str, timezone_str: str) -> lis
     today_start_utc = today_start_local.astimezone(timezone.utc).isoformat()
 
     async with httpx.AsyncClient() as client:
-        # Get users who signed on today and are enrolled
+        # Get all sign-ons today (active OR signed_off — not just active)
         signons_resp = await client.get(
             f"{_url()}/rest/v1/site_signons",
             headers=_headers(),
             params={
                 "tenant_id": f"eq.{tenant_id}",
                 "signed_on_at": f"gte.{today_start_utc}",
-                "status": "eq.active",
-                "select": "user_id",
+                "status": "in.(active,signed_off)",
+                "select": "user_id,site_id",
             },
         )
         if signons_resp.status_code != 200 or not signons_resp.json():
             return []
 
-        # Unique user IDs with active sign-ons today
-        signon_user_ids = list(set(s["user_id"] for s in signons_resp.json()))
+        # Build per-user set of sign-on site_ids
+        user_signon_sites = {}
+        for s in signons_resp.json():
+            uid = s["user_id"]
+            if uid not in user_signon_sites:
+                user_signon_sites[uid] = set()
+            user_signon_sites[uid].add(s["site_id"])
 
-        # Get users who have timesheets for today
+        all_user_ids = list(user_signon_sites.keys())
+
+        # Get timesheets for today for these users (with site_id)
         timesheets_resp = await client.get(
             f"{_url()}/rest/v1/timesheets",
             headers=_headers(),
             params={
                 "tenant_id": f"eq.{tenant_id}",
                 "work_date": f"eq.{today.isoformat()}",
-                "user_id": f"in.({','.join(signon_user_ids)})",
-                "select": "user_id",
+                "user_id": f"in.({','.join(all_user_ids)})",
+                "select": "user_id,site_id",
             },
         )
-        timesheet_user_ids = set()
+        user_timesheet_sites = {}
         if timesheets_resp.status_code == 200 and timesheets_resp.json():
-            timesheet_user_ids = set(t["user_id"] for t in timesheets_resp.json())
+            for t in timesheets_resp.json():
+                uid = t["user_id"]
+                if uid not in user_timesheet_sites:
+                    user_timesheet_sites[uid] = set()
+                user_timesheet_sites[uid].add(t["site_id"])
 
-        # Users who signed on but haven't logged a timesheet
-        missing_user_ids = [uid for uid in signon_user_ids if uid not in timesheet_user_ids]
+        # Users who have sign-on sites without matching timesheets
+        missing_user_ids = []
+        for uid, signon_sites in user_signon_sites.items():
+            logged_sites = user_timesheet_sites.get(uid, set())
+            if signon_sites - logged_sites:  # Any unlogged sites?
+                missing_user_ids.append(uid)
+
         if not missing_user_ids:
             return []
 
@@ -174,13 +194,13 @@ async def _send_reminders_for_tenant(
 
             if jill_phone:
                 message = (
-                    f"Hey {name}, don't forget to call Jill on {jill_phone} "
-                    f"to log your timesheet for today."
+                    f"Hey {name}, you still have timesheet entries to log for today. "
+                    f"Call Jill on {jill_phone} to finish up."
                 )
             else:
                 message = (
-                    f"Hey {name}, don't forget to call in and log your "
-                    f"timesheet for today."
+                    f"Hey {name}, you still have timesheet entries to log for today. "
+                    f"Call in to finish up."
                 )
 
             result = await send_sms(phone, message, from_number=from_number or None)
