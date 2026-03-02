@@ -54,7 +54,7 @@ async def get_admin_user_by_username(username: str) -> Optional[dict]:
             params={
                 "username": f"ilike.{username}",  # Case-insensitive match
                 "is_active": "eq.true",
-                "select": "id,username,email,password_hash,role,tenant_id,tenants(id,name)"
+                "select": "id,username,email,password_hash,role,tenant_id,must_change_password,tenants(id,name)"
             }
         )
 
@@ -73,7 +73,7 @@ async def get_admin_user_by_username(username: str) -> Optional[dict]:
             params={
                 "email": f"ilike.{username}",  # Case-insensitive match
                 "is_active": "eq.true",
-                "select": "id,username,email,password_hash,role,tenant_id,tenants(id,name)"
+                "select": "id,username,email,password_hash,role,tenant_id,must_change_password,tenants(id,name)"
             }
         )
 
@@ -175,6 +175,9 @@ async def login(request: Request, login_data: LoginRequest):
         # Update last login
         await update_last_login(user["id"])
 
+        # Check if user must change password on first login
+        must_change_password = user.get("must_change_password", False)
+
         # Prepare session data
         session_data = {
             "user_id": user["id"],
@@ -184,6 +187,7 @@ async def login(request: Request, login_data: LoginRequest):
             "tenant_id": user.get("tenant_id"),
             "tenant_name": user.get("tenants", {}).get("name") if user.get("tenants") else None,
             "permissions": permissions,
+            "must_change_password": must_change_password,
             "login_time": datetime.now(timezone.utc).isoformat()
         }
 
@@ -204,7 +208,8 @@ async def login(request: Request, login_data: LoginRequest):
                     "role": user["role"],
                     "tenant_id": user.get("tenant_id"),
                     "tenant_name": session_data["tenant_name"],
-                    "permissions": permissions
+                    "permissions": permissions,
+                    "must_change_password": must_change_password
                 }
             }
         )
@@ -326,7 +331,7 @@ async def change_password(request: Request, password_data: PasswordChangeRequest
                     "Prefer": "return=minimal"
                 },
                 params={"id": f"eq.{user['id']}"},
-                json={"password_hash": new_password_hash}
+                json={"password_hash": new_password_hash, "must_change_password": False}
             )
 
             if response.status_code not in [200, 204]:
@@ -335,6 +340,11 @@ async def change_password(request: Request, password_data: PasswordChangeRequest
                     status_code=500,
                     content={"success": False, "message": "Failed to update password"}
                 )
+
+        # Clear the must_change_password flag in session
+        if user_session.get("must_change_password"):
+            user_session["must_change_password"] = False
+            request.session["user"] = user_session
 
         logger.info(f"Password changed for user: {user_session['username']}")
 

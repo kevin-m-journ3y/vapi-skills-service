@@ -128,11 +128,27 @@ async def login_page(request: Request):
     # If already authenticated, redirect to dashboard
     user_session = request.session.get("user")
     if user_session:
+        if user_session.get("must_change_password"):
+            return RedirectResponse(url="/admin/change-password", status_code=302)
         return RedirectResponse(url="/admin", status_code=302)
 
     return templates.TemplateResponse(
         "auth/login.html",
         {"request": request}
+    )
+
+
+@router.get("/admin/change-password", response_class=HTMLResponse)
+async def change_password_page(request: Request):
+    """Change password page - used for forced first-login and voluntary changes"""
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    forced = user_session.get("must_change_password", False)
+    return templates.TemplateResponse(
+        "auth/change_password.html",
+        {"request": request, "forced": forced}
     )
 
 # ============================================
@@ -146,6 +162,8 @@ async def admin_dashboard(request: Request, theme: Optional[str] = None):
     user_session = request.session.get("user")
     if not user_session:
         return RedirectResponse(url="/admin/login", status_code=302)
+    if user_session.get("must_change_password"):
+        return RedirectResponse(url="/admin/change-password", status_code=302)
 
     # Choose template based on theme parameter
     template = "dashboard/index-modern.html" if theme == "modern" else "dashboard/index.html"

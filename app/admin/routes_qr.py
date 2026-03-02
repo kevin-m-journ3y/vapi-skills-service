@@ -811,6 +811,7 @@ async def create_tenant_admin(tenant_id: str, request: Request):
             "role": "tenant_admin",
             "tenant_id": tenant_id,
             "is_active": True,
+            "must_change_password": True,
         }
 
         resp = await client.post(

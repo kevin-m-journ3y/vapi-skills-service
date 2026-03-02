@@ -183,9 +183,13 @@
                         console.log('Response data:', data);
 
                         if (response.ok && data.success) {
-                            // Successful login - redirect to dashboard
+                            // Successful login - check if password change required
                             console.log('Login successful, redirecting...');
-                            window.location.href = '/admin';
+                            if (data.user && data.user.must_change_password) {
+                                window.location.href = '/admin/change-password';
+                            } else {
+                                window.location.href = '/admin';
+                            }
                         } else {
                             // Show error
                             this.errorMessage = data.message || `Login failed (${response.status}). Please try again.`;
