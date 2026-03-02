@@ -4,6 +4,13 @@
 
 {% block content %}
 <div x-data="timesheetReport()" x-init="init()">
+    <!-- Toast -->
+    <div x-show="toast.show" x-transition class="toast toast-top toast-end z-50" x-cloak>
+        <div class="alert" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'">
+            <span x-text="toast.message"></span>
+        </div>
+    </div>
+
     <!-- Page Header -->
     <div class="flex justify-between items-center mb-6">
         <div>
@@ -226,12 +233,48 @@
                         </thead>
                         <template x-for="entry in data.entries" :key="entry.id">
                             <tbody>
-                                <tr class="hover" :class="entry.call_transcript ? 'cursor-pointer' : ''" @click="entry.call_transcript ? (expandedId = expandedId === entry.id ? null : entry.id) : null">
+                                <tr class="hover" :class="entry.call_transcript ? 'cursor-pointer' : ''" @click="entry.call_transcript && !editingId ? (expandedId = expandedId === entry.id ? null : entry.id) : null">
                                     <td x-text="formatDate(entry.work_date)"></td>
                                     <td x-text="entry.users?.name || 'Unknown'"></td>
                                     <td x-text="entry.site_name || 'Unknown Site'"></td>
-                                    <td x-text="entry.start_time"></td>
-                                    <td x-text="entry.end_time"></td>
+                                    <td @click.stop>
+                                        <div x-show="editingId !== entry.id || editingField !== 'start_time'" class="flex items-center gap-1">
+                                            <span x-text="entry.start_time ? formatHHMM(entry.start_time) : '-'" class="text-sm"></span>
+                                            <button class="btn btn-ghost btn-xs px-1 opacity-30 hover:opacity-100"
+                                                    @click.stop="editEntry(entry.id, 'start_time')" title="Edit start time">
+                                                <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                            </button>
+                                        </div>
+                                        <div x-show="editingId === entry.id && editingField === 'start_time'" x-cloak class="flex flex-col gap-1">
+                                            <input type="time" class="input input-bordered input-xs w-32"
+                                                   :value="entry.start_time ? entry.start_time.substring(0,5) : ''"
+                                                   @keyup.escape="editingId = null"
+                                                   @keyup.enter="saveEntryTime(entry, 'start_time', $event.target.value)" />
+                                            <div class="flex gap-1">
+                                                <button class="btn btn-success btn-xs" @click="saveEntryTime(entry, 'start_time', $el.closest('td').querySelector('input').value)">Save</button>
+                                                <button class="btn btn-ghost btn-xs" @click="editingId = null">Cancel</button>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td @click.stop>
+                                        <div x-show="editingId !== entry.id || editingField !== 'end_time'" class="flex items-center gap-1">
+                                            <span x-text="entry.end_time ? formatHHMM(entry.end_time) : '-'" class="text-sm"></span>
+                                            <button class="btn btn-ghost btn-xs px-1 opacity-30 hover:opacity-100"
+                                                    @click.stop="editEntry(entry.id, 'end_time')" title="Edit end time">
+                                                <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                            </button>
+                                        </div>
+                                        <div x-show="editingId === entry.id && editingField === 'end_time'" x-cloak class="flex flex-col gap-1">
+                                            <input type="time" class="input input-bordered input-xs w-32"
+                                                   :value="entry.end_time ? entry.end_time.substring(0,5) : ''"
+                                                   @keyup.escape="editingId = null"
+                                                   @keyup.enter="saveEntryTime(entry, 'end_time', $event.target.value)" />
+                                            <div class="flex gap-1">
+                                                <button class="btn btn-success btn-xs" @click="saveEntryTime(entry, 'end_time', $el.closest('td').querySelector('input').value)">Save</button>
+                                                <button class="btn btn-ghost btn-xs" @click="editingId = null">Cancel</button>
+                                            </div>
+                                        </div>
+                                    </td>
                                     <td>
                                         <div class="badge" :class="getHoursBadgeClass(entry.hours_worked)" x-text="entry.hours_worked + ' hrs'"></div>
                                     </td>
@@ -373,11 +416,47 @@
                             </thead>
                             <template x-for="entry in data.entries" :key="entry.id">
                                 <tbody>
-                                    <tr class="hover" :class="entry.call_transcript ? 'cursor-pointer' : ''" @click="entry.call_transcript ? (expandedId = expandedId === entry.id ? null : entry.id) : null">
+                                    <tr class="hover" :class="entry.call_transcript ? 'cursor-pointer' : ''" @click="entry.call_transcript && !editingId ? (expandedId = expandedId === entry.id ? null : entry.id) : null">
                                         <td x-text="formatDate(entry.work_date)"></td>
                                         <td x-text="entry.users?.name || 'Unknown'"></td>
-                                        <td x-text="entry.start_time"></td>
-                                        <td x-text="entry.end_time"></td>
+                                        <td @click.stop>
+                                            <div x-show="editingId !== entry.id || editingField !== 'start_time'" class="flex items-center gap-1">
+                                                <span x-text="entry.start_time ? formatHHMM(entry.start_time) : '-'" class="text-sm"></span>
+                                                <button class="btn btn-ghost btn-xs px-1 opacity-30 hover:opacity-100"
+                                                        @click.stop="editEntry(entry.id, 'start_time')" title="Edit start time">
+                                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                                </button>
+                                            </div>
+                                            <div x-show="editingId === entry.id && editingField === 'start_time'" x-cloak class="flex flex-col gap-1">
+                                                <input type="time" class="input input-bordered input-xs w-32"
+                                                       :value="entry.start_time ? entry.start_time.substring(0,5) : ''"
+                                                       @keyup.escape="editingId = null"
+                                                       @keyup.enter="saveEntryTime(entry, 'start_time', $event.target.value)" />
+                                                <div class="flex gap-1">
+                                                    <button class="btn btn-success btn-xs" @click="saveEntryTime(entry, 'start_time', $el.closest('td').querySelector('input').value)">Save</button>
+                                                    <button class="btn btn-ghost btn-xs" @click="editingId = null">Cancel</button>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td @click.stop>
+                                            <div x-show="editingId !== entry.id || editingField !== 'end_time'" class="flex items-center gap-1">
+                                                <span x-text="entry.end_time ? formatHHMM(entry.end_time) : '-'" class="text-sm"></span>
+                                                <button class="btn btn-ghost btn-xs px-1 opacity-30 hover:opacity-100"
+                                                        @click.stop="editEntry(entry.id, 'end_time')" title="Edit end time">
+                                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                                </button>
+                                            </div>
+                                            <div x-show="editingId === entry.id && editingField === 'end_time'" x-cloak class="flex flex-col gap-1">
+                                                <input type="time" class="input input-bordered input-xs w-32"
+                                                       :value="entry.end_time ? entry.end_time.substring(0,5) : ''"
+                                                       @keyup.escape="editingId = null"
+                                                       @keyup.enter="saveEntryTime(entry, 'end_time', $event.target.value)" />
+                                                <div class="flex gap-1">
+                                                    <button class="btn btn-success btn-xs" @click="saveEntryTime(entry, 'end_time', $el.closest('td').querySelector('input').value)">Save</button>
+                                                    <button class="btn btn-ghost btn-xs" @click="editingId = null">Cancel</button>
+                                                </div>
+                                            </div>
+                                        </td>
                                         <td>
                                             <div class="badge" :class="getHoursBadgeClass(entry.hours_worked)" x-text="entry.hours_worked + ' hrs'"></div>
                                         </td>
@@ -426,6 +505,9 @@ function timesheetReport() {
 
         // UI state
         expandedId: null,
+        editingId: null,
+        editingField: null,
+        toast: { show: false, message: '', type: 'success' },
 
         // Dropdown data
         users: [],
@@ -649,6 +731,54 @@ function timesheetReport() {
             if (hours >= 7) return 'badge-success';
             if (hours >= 4) return 'badge-warning';
             return 'badge-error';
+        },
+
+        formatHHMM(timeStr) {
+            if (!timeStr) return '-';
+            const [h, m] = timeStr.split(':');
+            const hour = parseInt(h);
+            const ampm = hour >= 12 ? 'pm' : 'am';
+            const h12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+            return `${h12}:${m} ${ampm}`;
+        },
+
+        showToast(message, type = 'success') {
+            this.toast = { show: true, message, type };
+            setTimeout(() => { this.toast.show = false; }, 3000);
+        },
+
+        editEntry(entryId, field) {
+            this.editingId = entryId;
+            this.editingField = field;
+        },
+
+        async saveEntryTime(entry, field, value) {
+            this.editingId = null;
+            this.editingField = null;
+            if (!value) return;
+
+            const timeValue = value.length === 5 ? value + ':00' : value;
+
+            try {
+                const resp = await fetch(`/admin/timesheets/${entry.id}/update`, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ [field]: timeValue })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    entry[field] = data.timesheet[field] || timeValue;
+                    if (data.timesheet.hours_worked != null) {
+                        entry.hours_worked = data.timesheet.hours_worked;
+                    }
+                    this.showToast('Time updated');
+                } else {
+                    this.showToast(data.error || 'Failed to update', 'error');
+                }
+            } catch (err) {
+                this.showToast('Failed to update', 'error');
+            }
         },
 
         exportCSV() {

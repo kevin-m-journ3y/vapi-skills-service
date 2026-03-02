@@ -1526,6 +1526,79 @@ async def get_timesheets_by_site(
         logger.error(f"Error fetching timesheets by site: {e}")
         return {"success": False, "error": str(e)}
 
+
+@router.post("/admin/timesheets/{timesheet_id}/update")
+async def update_timesheet_entry(timesheet_id: str, request: Request):
+    """Update a timesheet entry (start_time, end_time, work_description)."""
+    user_session = await get_session_user(request)
+    is_super_admin = user_session.get("role") == "super_admin"
+    session_tenant_id = user_session.get("tenant_id")
+    body = await request.json()
+
+    async with httpx.AsyncClient() as client:
+        # Verify access - fetch the record
+        check = await client.get(
+            f"{os.getenv('SUPABASE_URL')}/rest/v1/timesheets",
+            headers={
+                "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            },
+            params={"id": f"eq.{timesheet_id}", "select": "id,tenant_id,start_time,end_time"},
+        )
+        if check.status_code != 200 or not check.json():
+            return {"success": False, "error": "Timesheet entry not found"}
+
+        record = check.json()[0]
+        if not is_super_admin and record["tenant_id"] != session_tenant_id:
+            return {"success": False, "error": "Access denied"}
+
+        # Build update payload
+        update_data = {}
+        if "start_time" in body and body["start_time"]:
+            update_data["start_time"] = body["start_time"]
+        if "end_time" in body and body["end_time"]:
+            update_data["end_time"] = body["end_time"]
+        if "work_description" in body:
+            update_data["work_description"] = body["work_description"]
+
+        # Recalculate hours_worked if times changed
+        new_start = update_data.get("start_time", record.get("start_time"))
+        new_end = update_data.get("end_time", record.get("end_time"))
+        if new_start and new_end and ("start_time" in update_data or "end_time" in update_data):
+            try:
+                from datetime import datetime as dt
+                start_dt = dt.strptime(new_start.split("+")[0].split("Z")[0], "%H:%M:%S" if len(new_start) <= 8 else "%H:%M")
+                end_dt = dt.strptime(new_end.split("+")[0].split("Z")[0], "%H:%M:%S" if len(new_end) <= 8 else "%H:%M")
+                diff = (end_dt - start_dt).total_seconds() / 3600
+                if diff < 0:
+                    diff += 24  # handle overnight
+                update_data["hours_worked"] = round(diff, 2)
+            except Exception as e:
+                logger.warning(f"Could not recalculate hours: {e}")
+
+        if not update_data:
+            return {"success": False, "error": "No changes provided"}
+
+        resp = await client.patch(
+            f"{os.getenv('SUPABASE_URL')}/rest/v1/timesheets",
+            headers={
+                "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                "Content-Type": "application/json",
+                "Prefer": "return=representation"
+            },
+            params={"id": f"eq.{timesheet_id}"},
+            json=update_data,
+        )
+
+        if resp.status_code in (200, 204):
+            updated = resp.json()[0] if resp.json() else {}
+            return {"success": True, "timesheet": updated}
+        else:
+            logger.error("Failed to update timesheet %s: %s", timesheet_id, resp.text)
+            return {"success": False, "error": "Failed to update"}
+
+
 @router.get("/admin/reports/voice-notes", response_class=HTMLResponse)
 async def voice_notes_report_page(request: Request, theme: Optional[str] = None):
     """Voice notes report page"""

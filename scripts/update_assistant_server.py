@@ -44,7 +44,8 @@ async def update_assistant_server():
         # Find assistants that need server webhooks
         assistants_to_update = [
             'JSMB-Jill-site-progress',
-            'JSMB-Jill-voice-notes'
+            'JSMB-Jill-voice-notes',
+            'JSMB-Jill-timesheet',
         ]
 
         for assistant_name in assistants_to_update:

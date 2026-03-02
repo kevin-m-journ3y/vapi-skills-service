@@ -115,11 +115,43 @@
                                 <td>
                                     <span class="text-sm" x-text="formatTime(s.signed_on_at)"></span>
                                 </td>
-                                <td>
-                                    <span x-text="s.start_time ? formatHHMM(s.start_time) : '-'" class="text-sm"></span>
+                                <td @click.stop>
+                                    <div x-show="!isEditing(s.id, 'start_time')" class="flex items-center gap-1">
+                                        <span x-text="s.start_time ? formatHHMM(s.start_time) : '-'" class="text-sm"></span>
+                                        <button x-show="s.timesheet_id" class="btn btn-ghost btn-xs px-1 opacity-30 hover:opacity-100"
+                                                @click.stop="editTimesheetTime(idx, 'start_time')" title="Edit start time">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                        </button>
+                                    </div>
+                                    <div x-show="isEditing(s.id, 'start_time')" x-cloak class="flex flex-col gap-1">
+                                        <input type="time" class="input input-bordered input-xs w-32"
+                                               :value="s.start_time ? s.start_time.substring(0,5) : ''"
+                                               @keyup.escape="editingId = null"
+                                               @keyup.enter="saveTimesheetTime(idx, 'start_time', $event.target.value)" />
+                                        <div class="flex gap-1">
+                                            <button class="btn btn-success btn-xs gap-1" @click="saveTimesheetTime(idx, 'start_time', $el.closest('td').querySelector('input').value)">Save</button>
+                                            <button class="btn btn-ghost btn-xs" @click="editingId = null">Cancel</button>
+                                        </div>
+                                    </div>
                                 </td>
-                                <td>
-                                    <span x-text="s.end_time ? formatHHMM(s.end_time) : '-'" class="text-sm"></span>
+                                <td @click.stop>
+                                    <div x-show="!isEditing(s.id, 'end_time')" class="flex items-center gap-1">
+                                        <span x-text="s.end_time ? formatHHMM(s.end_time) : '-'" class="text-sm"></span>
+                                        <button x-show="s.timesheet_id" class="btn btn-ghost btn-xs px-1 opacity-30 hover:opacity-100"
+                                                @click.stop="editTimesheetTime(idx, 'end_time')" title="Edit end time">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                        </button>
+                                    </div>
+                                    <div x-show="isEditing(s.id, 'end_time')" x-cloak class="flex flex-col gap-1">
+                                        <input type="time" class="input input-bordered input-xs w-32"
+                                               :value="s.end_time ? s.end_time.substring(0,5) : ''"
+                                               @keyup.escape="editingId = null"
+                                               @keyup.enter="saveTimesheetTime(idx, 'end_time', $event.target.value)" />
+                                        <div class="flex gap-1">
+                                            <button class="btn btn-success btn-xs gap-1" @click="saveTimesheetTime(idx, 'end_time', $el.closest('td').querySelector('input').value)">Save</button>
+                                            <button class="btn btn-ghost btn-xs" @click="editingId = null">Cancel</button>
+                                        </div>
+                                    </div>
                                 </td>
                                 <td>
                                     <span x-text="s.hours_worked != null ? s.hours_worked + ' hrs' : '-'"
@@ -312,6 +344,47 @@ function signonsReport() {
             // Format as YYYY-MM-DDTHH:MM for datetime-local input
             const pad = n => String(n).padStart(2, '0');
             return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        },
+
+        editTimesheetTime(idx, field) {
+            const s = this.signons[idx];
+            this.editingId = s.id;
+            this.editingField = field;
+        },
+
+        async saveTimesheetTime(idx, field, value) {
+            this.editingId = null;
+            this.editingField = null;
+            if (!value) return;
+
+            const s = this.signons[idx];
+            if (!s.timesheet_id) {
+                this.showToast('No linked timesheet to update', 'error');
+                return;
+            }
+
+            const timeValue = value.length === 5 ? value + ':00' : value;
+
+            try {
+                const resp = await fetch(`/admin/timesheets/${s.timesheet_id}/update`, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ [field]: timeValue })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.signons[idx][field] = data.timesheet[field] || timeValue;
+                    if (data.timesheet.hours_worked != null) {
+                        this.signons[idx].hours_worked = data.timesheet.hours_worked;
+                    }
+                    this.showToast('Time updated');
+                } else {
+                    this.showToast(data.error || 'Failed to update', 'error');
+                }
+            } catch (err) {
+                this.showToast('Failed to update', 'error');
+            }
         },
 
         async saveTime(idx, field, value) {
