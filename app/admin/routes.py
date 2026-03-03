@@ -173,6 +173,20 @@ async def admin_dashboard(request: Request, theme: Optional[str] = None):
         {"request": request, "page_title": "Admin Dashboard"}
     )
 
+@router.get("/admin/help", response_class=HTMLResponse)
+async def help_page(request: Request):
+    """Help & Guides page"""
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
+    if user_session.get("must_change_password"):
+        return RedirectResponse(url="/admin/change-password", status_code=302)
+
+    return templates.TemplateResponse(
+        "help/index.html",
+        {"request": request, "page_title": "Help & Guides"}
+    )
+
 async def get_session_user(request: Request) -> dict:
     """Get current user from session"""
     user_session = request.session.get("user")
