@@ -365,13 +365,23 @@
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2" x-show="latestEvalRun?.results">
-                    <template x-for="result in latestEvalRun?.results || []" :key="result.name">
-                        <div class="flex items-center gap-2 p-2 rounded bg-base-200">
-                            <span class="text-lg" x-text="result.status === 'pass' ? '&#x2713;' : '&#x2717;'"
-                                  :class="result.status === 'pass' ? 'text-success font-bold' : 'text-error font-bold'"></span>
-                            <div class="flex-1 min-w-0">
-                                <div class="text-xs font-mono truncate" x-text="result.name"></div>
-                                <div class="text-xs text-error truncate" x-show="result.failure_reason" x-text="result.failure_reason"></div>
+                    <template x-for="(result, idx) in latestEvalRun?.results || []" :key="result.name">
+                        <div class="rounded bg-base-200 cursor-pointer transition-all hover:bg-base-300"
+                             :class="expandedEval === result.name ? 'col-span-1 md:col-span-2 lg:col-span-3' : ''"
+                             @click="expandedEval = expandedEval === result.name ? null : result.name">
+                            <div class="flex items-center gap-2 p-2">
+                                <span class="text-lg shrink-0" x-text="result.status === 'pass' ? '&#x2713;' : '&#x2717;'"
+                                      :class="result.status === 'pass' ? 'text-success font-bold' : 'text-error font-bold'"></span>
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-xs font-mono" :class="expandedEval === result.name ? '' : 'truncate'" x-text="result.name"></div>
+                                    <div class="text-xs text-error" :class="expandedEval === result.name ? 'whitespace-pre-wrap mt-1' : 'truncate'"
+                                         x-show="result.failure_reason" x-text="result.failure_reason"></div>
+                                </div>
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3 shrink-0 text-base-content/40 transition-transform"
+                                     :class="expandedEval === result.name ? 'rotate-180' : ''"
+                                     fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                                </svg>
                             </div>
                         </div>
                     </template>
@@ -498,6 +508,7 @@ function learningLoop() {
         evalRuns: [],
         latestEvalRun: null,
         evalPollInterval: null,
+        expandedEval: null,
 
         // Prompt changes
         promptChanges: [],
