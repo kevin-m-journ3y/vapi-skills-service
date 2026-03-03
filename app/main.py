@@ -436,7 +436,7 @@ async def handle_end_of_call_report(request: Request):
 
         # Calculate duration
         duration_seconds = None
-        started_at = call.get("startedAt")
+        started_at = call.get("startedAt") or call.get("createdAt")
         ended_at = call.get("endedAt")
         if started_at and ended_at:
             try:
@@ -446,6 +446,12 @@ async def handle_end_of_call_report(request: Request):
                 duration_seconds = (end_dt - start_dt).total_seconds()
             except Exception:
                 pass
+
+        # Ensure we always have a call_started_at for date filtering
+        if not started_at:
+            from datetime import datetime as dt_cls, timezone as tz_cls
+            started_at = dt_cls.now(tz_cls.utc).isoformat()
+            logger.warning(f"No startedAt in VAPI payload for call {call_id}, using current timestamp")
 
         # Update tables with full transcript
         async with httpx.AsyncClient() as client:
