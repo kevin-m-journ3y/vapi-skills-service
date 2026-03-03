@@ -6,7 +6,9 @@ Jobs query for users who signed on today but have no timesheet entry.
 """
 
 import os
+import fcntl
 import logging
+import tempfile
 from datetime import datetime, date
 from typing import Optional
 
@@ -22,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 # Module-level scheduler instance
 scheduler = AsyncIOScheduler()
+
+# File lock to ensure only one worker runs the scheduler (multi-worker safe)
+_lock_file = None
+_is_scheduler_owner = False
 
 SUPABASE_URL = ""
 SUPABASE_KEY = ""
@@ -316,8 +322,29 @@ async def reschedule_tenant(tenant_id: str):
         _schedule_tenant_jobs(config)
 
 
+def _acquire_scheduler_lock() -> bool:
+    """Try to acquire an exclusive file lock so only one worker runs the scheduler."""
+    global _lock_file, _is_scheduler_owner
+    try:
+        lock_path = os.path.join(tempfile.gettempdir(), "journ3y_scheduler.lock")
+        _lock_file = open(lock_path, "w")
+        fcntl.flock(_lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _is_scheduler_owner = True
+        logger.info("Acquired scheduler lock (pid=%d)", os.getpid())
+        return True
+    except (OSError, IOError):
+        logger.info("Another worker owns the scheduler, skipping (pid=%d)", os.getpid())
+        if _lock_file:
+            _lock_file.close()
+            _lock_file = None
+        return False
+
+
 async def start_scheduler():
     """Start the scheduler and load all tenant jobs. Called on app startup."""
+    if not _acquire_scheduler_lock():
+        return
+
     try:
         configs = await _get_enabled_tenants()
         for config in configs:
@@ -335,6 +362,15 @@ async def start_scheduler():
 
 def stop_scheduler():
     """Stop the scheduler. Called on app shutdown."""
+    global _lock_file, _is_scheduler_owner
     if scheduler.running:
         scheduler.shutdown(wait=False)
         logger.info("Reminder scheduler stopped")
+    if _lock_file:
+        try:
+            fcntl.flock(_lock_file.fileno(), fcntl.LOCK_UN)
+            _lock_file.close()
+        except Exception:
+            pass
+        _lock_file = None
+        _is_scheduler_owner = False
