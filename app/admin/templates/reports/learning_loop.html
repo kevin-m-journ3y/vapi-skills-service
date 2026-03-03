@@ -365,27 +365,64 @@
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2" x-show="latestEvalRun?.results">
-                    <template x-for="(result, idx) in latestEvalRun?.results || []" :key="result.name">
-                        <div class="rounded bg-base-200 cursor-pointer transition-all hover:bg-base-300"
-                             :class="expandedEval === result.name ? 'col-span-1 md:col-span-2 lg:col-span-3' : ''"
-                             @click="expandedEval = expandedEval === result.name ? null : result.name">
-                            <div class="flex items-center gap-2 p-2">
-                                <span class="text-lg shrink-0" x-text="result.status === 'pass' ? '&#x2713;' : '&#x2717;'"
-                                      :class="result.status === 'pass' ? 'text-success font-bold' : 'text-error font-bold'"></span>
-                                <div class="flex-1 min-w-0">
-                                    <div class="text-xs font-mono" :class="expandedEval === result.name ? '' : 'truncate'" x-text="result.name"></div>
-                                    <div class="text-xs text-error" :class="expandedEval === result.name ? 'whitespace-pre-wrap mt-1' : 'truncate'"
-                                         x-show="result.failure_reason" x-text="result.failure_reason"></div>
-                                </div>
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3 shrink-0 text-base-content/40 transition-transform"
-                                     :class="expandedEval === result.name ? 'rotate-180' : ''"
-                                     fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                                </svg>
+                    <template x-for="result in latestEvalRun?.results || []" :key="result.name">
+                        <div class="flex items-center gap-2 p-2 rounded cursor-pointer transition-colors hover:bg-base-300"
+                             :class="result.status === 'pass' ? 'bg-base-200' : 'bg-error/10'"
+                             @click="selectedEval = result; $refs.evalModal.showModal()">
+                            <span class="text-lg shrink-0" x-text="result.status === 'pass' ? '&#x2713;' : '&#x2717;'"
+                                  :class="result.status === 'pass' ? 'text-success font-bold' : 'text-error font-bold'"></span>
+                            <div class="flex-1 min-w-0">
+                                <div class="text-xs font-mono truncate" x-text="result.name"></div>
+                                <div class="text-xs text-error truncate" x-show="result.failure_reason" x-text="result.failure_reason"></div>
                             </div>
                         </div>
                     </template>
                 </div>
+
+                <!-- Eval Detail Modal -->
+                <dialog x-ref="evalModal" class="modal">
+                    <div class="modal-box max-w-lg" x-show="selectedEval">
+                        <form method="dialog">
+                            <button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">X</button>
+                        </form>
+
+                        <!-- Status + Name -->
+                        <div class="flex items-center gap-3 mb-4">
+                            <span class="text-3xl" x-text="selectedEval?.status === 'pass' ? '&#x2713;' : '&#x2717;'"
+                                  :class="selectedEval?.status === 'pass' ? 'text-success' : 'text-error'"></span>
+                            <div>
+                                <div class="badge mb-1" :class="selectedEval?.status === 'pass' ? 'badge-success' : 'badge-error'"
+                                     x-text="selectedEval?.status === 'pass' ? 'PASSED' : 'FAILED'"></div>
+                                <div class="font-mono text-sm" x-text="selectedEval?.name"></div>
+                            </div>
+                        </div>
+
+                        <!-- Assistant & Category -->
+                        <div class="flex gap-2 mb-4">
+                            <span class="badge badge-outline badge-sm" x-text="evalAssistant(selectedEval?.name)"></span>
+                            <span class="badge badge-ghost badge-sm" x-text="evalCategory(selectedEval?.name)"></span>
+                        </div>
+
+                        <!-- Failure Reason -->
+                        <div x-show="selectedEval?.failure_reason" class="mb-4">
+                            <div class="text-xs font-semibold text-base-content/60 uppercase mb-1">Failure Reason</div>
+                            <div class="bg-error/10 border border-error/20 rounded-lg p-3 text-sm text-error" x-text="selectedEval?.failure_reason"></div>
+                        </div>
+
+                        <!-- Success note for passing evals -->
+                        <div x-show="!selectedEval?.failure_reason && selectedEval?.status === 'pass'" class="mb-4">
+                            <div class="bg-success/10 border border-success/20 rounded-lg p-3 text-sm text-success">
+                                This eval scenario completed successfully with all criteria met.
+                            </div>
+                        </div>
+
+                        <!-- Run ID -->
+                        <div x-show="selectedEval?.run_id" class="text-xs text-base-content/40">
+                            Run ID: <span class="font-mono" x-text="selectedEval?.run_id"></span>
+                        </div>
+                    </div>
+                    <form method="dialog" class="modal-backdrop"><button>close</button></form>
+                </dialog>
 
                 <!-- Error message for failed runs -->
                 <div class="alert alert-error mt-2" x-show="latestEvalRun?.status === 'failed' && latestEvalRun?.error_message">
@@ -508,7 +545,7 @@ function learningLoop() {
         evalRuns: [],
         latestEvalRun: null,
         evalPollInterval: null,
-        expandedEval: null,
+        selectedEval: null,
 
         // Prompt changes
         promptChanges: [],
@@ -628,6 +665,31 @@ function learningLoop() {
                 this.evalRunning = false;
                 console.error('Failed to run evals:', err);
             }
+        },
+
+        evalAssistant(name) {
+            if (!name) return '';
+            if (name.startsWith('greeter_')) return 'Greeter';
+            if (name.startsWith('timesheet_')) return 'Timesheet';
+            if (name.startsWith('full_flow_')) return 'Full Flow';
+            if (name.startsWith('voice_note_')) return 'Voice Notes';
+            if (name.startsWith('site_update_')) return 'Site Updates';
+            return 'Unknown';
+        },
+
+        evalCategory(name) {
+            if (!name) return '';
+            if (name.includes('phonetic')) return 'Speech Recognition';
+            if (name.includes('routing')) return 'Routing';
+            if (name.includes('site_')) return 'Site Matching';
+            if (name.includes('overhead')) return 'Overhead Work';
+            if (name.includes('time_parsing')) return 'Time Parsing';
+            if (name.includes('historical_date')) return 'Date Handling';
+            if (name.includes('confirmation_readback')) return 'Confirmation';
+            if (name.includes('no_repeated')) return 'Quality';
+            if (name.includes('multi_site')) return 'Multi-Site';
+            if (name.includes('full_flow')) return 'End-to-End';
+            return 'General';
         },
 
         formatTimestamp(ts) {
