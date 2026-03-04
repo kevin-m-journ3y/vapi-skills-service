@@ -610,7 +610,22 @@ Output exactly one word: pass or fail"""
                         "model": "gpt-4o-mini",
                         "messages": [{
                             "role": "system",
-                            "content": """You are an LLM-Judge. The user has provided all timesheet info: site (Bishops Avenue), times (7 to 3:30), and work (framing and plastering). The assistant should now read back / confirm the details before saving.
+                            "content": "PASS if assistant asks about escalation, or asks if anything needs to be flagged/reported, or proceeds to read back the entry. FAIL if it saves without asking. Output: pass or fail"
+                        }]
+                    }
+                }
+            },
+            {"role": "user", "content": "nah nothing"},
+            {
+                "role": "assistant",
+                "judgePlan": {
+                    "type": "ai",
+                    "model": {
+                        "provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "messages": [{
+                            "role": "system",
+                            "content": """You are an LLM-Judge. The user has provided all timesheet info: site (Bishops Avenue), times (7 to 3:30), work (framing and plastering), and said nothing to escalate. The assistant should now read back / confirm the details before saving.
 
 PASS criteria (ALL must be met):
 - The assistant reads back or summarises at least 2 of: the site name, the hours/times, or the work description
@@ -672,7 +687,22 @@ Output exactly one word: pass or fail"""
                         "model": "gpt-4o-mini",
                         "messages": [{
                             "role": "system",
-                            "content": "PASS if assistant reads back or confirms the entry. Output: pass or fail"
+                            "content": "PASS if assistant asks about escalation or anything to flag/report, or proceeds to read back. Output: pass or fail"
+                        }]
+                    }
+                }
+            },
+            {"role": "user", "content": "nah nothing"},
+            {
+                "role": "assistant",
+                "judgePlan": {
+                    "type": "ai",
+                    "model": {
+                        "provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "messages": [{
+                            "role": "system",
+                            "content": "PASS if assistant reads back or confirms the entry details. Output: pass or fail"
                         }]
                     }
                 }
