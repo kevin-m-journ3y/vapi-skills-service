@@ -918,7 +918,7 @@ async def reset_admin_password(tenant_id: str, admin_id: str, request: Request):
             f"{_url()}/rest/v1/admin_users",
             headers={**_headers(), "Prefer": "return=minimal"},
             params={"id": f"eq.{admin_id}"},
-            json={"password_hash": hash_password(new_password)},
+            json={"password_hash": hash_password(new_password), "must_change_password": True},
         )
 
         if resp.status_code in (200, 204):
