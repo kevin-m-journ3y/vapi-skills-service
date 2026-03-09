@@ -686,7 +686,7 @@ async def health_check():
 
 @app.get("/")
 async def root():
-    return RedirectResponse(url="/admin/dashboard")
+    return RedirectResponse(url="/admin")
 
 # ============================================
 # TENANT AUTHENTICATION DEPENDENCY
