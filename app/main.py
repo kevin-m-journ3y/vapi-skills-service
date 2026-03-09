@@ -3,6 +3,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel
@@ -685,7 +686,7 @@ async def health_check():
 
 @app.get("/")
 async def root():
-    return {"message": "Multi-Tenant Document RAG + VAPI Skills System", "version": "1.0.0"}
+    return RedirectResponse(url="/admin/dashboard")
 
 # ============================================
 # TENANT AUTHENTICATION DEPENDENCY
