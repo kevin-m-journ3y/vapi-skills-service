@@ -180,7 +180,19 @@ class BaseAssistant(ABC):
                 "office work",
                 "overheads",
                 "paperwork",
-                "general duties"
+                "general duties",
+                # ===========================================
+                # SHORT RESPONSES (prevent "no" → "nine" etc)
+                # ===========================================
+                "no",
+                "nah",
+                "nope",
+                "yes",
+                "yep",
+                "yeah",
+                "correct",
+                "that's right",
+                "that's it",
             ]
         }
 
@@ -283,7 +295,8 @@ class BaseAssistant(ABC):
             "stopSpeakingPlan": self.get_stop_speaking_plan(),
             "startSpeakingPlan": self.get_start_speaking_plan(),
             "firstMessage": self.get_first_message(),
-            "firstMessageMode": "assistant-speaks-first"
+            "firstMessageMode": "assistant-speaks-first",
+            "backgroundDenoisingEnabled": True,
         }
 
         # Add server config if available

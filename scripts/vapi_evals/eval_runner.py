@@ -28,7 +28,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 load_dotenv()
 
-from scripts.vapi_evals.eval_definitions import ALL_EVALS, GREETER_EVALS, TIMESHEET_EVALS, FLOW_EVALS
+from scripts.vapi_evals.eval_definitions import ALL_EVALS, GREETER_EVALS, TIMESHEET_EVALS, FLOW_EVALS, QR_EVALS
 
 VAPI_API_KEY = os.getenv("VAPI_API_KEY")
 VAPI_BASE_URL = "https://api.vapi.ai"
@@ -153,6 +153,16 @@ class VAPIEvalsRunner:
         # Create flow evals (run against timesheet assistant)
         print(f"\nCreating Flow evals ({len(FLOW_EVALS)} tests):")
         for eval_def in FLOW_EVALS:
+            if eval_def["name"] in existing_names:
+                print(f"  - Skipping {eval_def['name']} (already exists)")
+                continue
+            eval_id = await self.create_eval(eval_def, "timesheet")
+            if eval_id:
+                self.eval_ids[eval_def["name"]] = eval_id
+
+        # Create QR sign-on evals (run against timesheet assistant)
+        print(f"\nCreating QR Sign-on evals ({len(QR_EVALS)} tests):")
+        for eval_def in QR_EVALS:
             if eval_def["name"] in existing_names:
                 print(f"  - Skipping {eval_def['name']} (already exists)")
                 continue
@@ -291,6 +301,17 @@ class VAPIEvalsRunner:
                     "eval_id": eval_map[eval_def["name"]],
                     "assistant_id": self.assistant_ids.get("timesheet"),
                     "type": "flow"
+                })
+
+        for eval_def in QR_EVALS:
+            if filter_name and filter_name not in eval_def["name"]:
+                continue
+            if eval_def["name"] in eval_map:
+                evals_to_run.append({
+                    "name": eval_def["name"],
+                    "eval_id": eval_map[eval_def["name"]],
+                    "assistant_id": self.assistant_ids.get("timesheet"),
+                    "type": "qr"
                 })
 
         if not evals_to_run:

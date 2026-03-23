@@ -739,5 +739,80 @@ Output exactly one word: pass or fail"""
     }
 ]
 
+# =====================================================
+# QR SIGN-ON FLOW EVALS
+# Tests scenarios where the user has/hasn't scanned QR
+# =====================================================
+
+QR_EVALS = [
+    {
+        "name": "timesheet_forgot_to_sign_in",
+        "description": "User says they forgot to sign in - Jill should reassure and ask which site",
+        "messages": [
+            {"role": "user", "content": "I forgot to sign in this morning"},
+            {
+                "role": "assistant",
+                "judgePlan": {
+                    "type": "ai",
+                    "model": {
+                        "provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "messages": [{
+                            "role": "system",
+                            "content": """You are an LLM-Judge. The user said they forgot to sign in (QR code scan). The assistant should reassure them and proceed with the timesheet flow.
+
+PASS criteria (ANY counts as pass):
+- The assistant reassures ("no worries", "that's fine", "no problem") and asks which site
+- The assistant proceeds to ask about site, times, or work
+- The assistant makes a tool call (proceeding with the flow)
+
+FAIL criteria (ALL must be true to fail):
+- The assistant is confused about what "sign in" means
+- The assistant tells the user to go sign in or scan the QR code
+- The assistant does nothing useful with the information
+
+Output exactly one word: pass or fail"""
+                        }]
+                    }
+                }
+            }
+        ]
+    },
+    {
+        "name": "timesheet_didnt_scan_with_site",
+        "description": "User says they didn't scan but provides site - Jill should extract site and proceed",
+        "messages": [
+            {"role": "user", "content": "I didn't scan in but I was at Cranbrook from 7 to 4"},
+            {
+                "role": "assistant",
+                "judgePlan": {
+                    "type": "ai",
+                    "model": {
+                        "provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "messages": [{
+                            "role": "system",
+                            "content": """You are an LLM-Judge. The user said they didn't scan in but provided their site (Cranbrook) and times (7 to 4) in the same message.
+
+PASS criteria (ANY counts as pass):
+- The assistant makes a tool call to identify Cranbrook — this is correct behaviour, it needs the site_id
+- The assistant acknowledges Cranbrook as the site and proceeds
+- The assistant does NOT re-ask which site or re-ask start/end times
+- The assistant moves forward (asks about work description, or confirms times)
+
+FAIL criteria (ALL must be true to fail):
+- The assistant asks "which site did you work at?" as if user never said Cranbrook
+- The assistant asks about start time or end time as if user never said 7 to 4
+- The assistant is confused by "didn't scan" and doesn't proceed
+
+Output exactly one word: pass or fail"""
+                        }]
+                    }
+                }
+            }
+        ]
+    },
+]
+
 # Combine all evals
-ALL_EVALS = GREETER_EVALS + TIMESHEET_EVALS + FLOW_EVALS
+ALL_EVALS = GREETER_EVALS + TIMESHEET_EVALS + FLOW_EVALS + QR_EVALS

@@ -12,6 +12,8 @@ Commands:
     python scripts/staging.py promote [assistant]   # Copy staging config → production
     python scripts/staging.py cleanup [assistant]   # Delete staging assistant
     python scripts/staging.py status                # Show all staging assistants
+    python scripts/staging.py create-squad          # Create full staging squad + assign test phone
+    python scripts/staging.py teardown-squad        # Delete staging squad + restore phone to prod
 
 Arguments:
     assistant: timesheet, greeter, voice_notes, site_progress (default: timesheet)
@@ -52,6 +54,12 @@ ASSISTANT_MAP = {
 }
 
 STAGING_SUFFIX = "-staging"
+
+# Production squad and phone numbers
+PROD_SQUAD_ID = "30016c3e-f038-4c18-9b33-5717be011eac"
+PROD_SQUAD_NAME = "JSMB-Jill-multi-skill-squad"
+STAGING_SQUAD_NAME = "JSMB-Jill-multi-skill-squad-staging"
+TEST_PHONE_NUMBER_ID = "dbf0544d-8fe8-4f48-a1ce-b2f3888916b3"  # JOURN3Y +61468086094
 
 
 def staging_name(prod_name: str) -> str:
@@ -221,7 +229,7 @@ async def cmd_push(assistant_key: str, summary: str = ""):
 
 async def cmd_eval(assistant_key: str):
     """Run evals against the staging assistant"""
-    from scripts.vapi_evals.eval_definitions import GREETER_EVALS, TIMESHEET_EVALS, FLOW_EVALS
+    from scripts.vapi_evals.eval_definitions import GREETER_EVALS, TIMESHEET_EVALS, FLOW_EVALS, QR_EVALS
 
     prod_name = ASSISTANT_MAP[assistant_key]
     stg_name = staging_name(prod_name)
@@ -249,7 +257,7 @@ async def cmd_eval(assistant_key: str):
         if assistant_key == "greeter":
             eval_defs = GREETER_EVALS
         elif assistant_key == "timesheet":
-            eval_defs = TIMESHEET_EVALS + FLOW_EVALS
+            eval_defs = TIMESHEET_EVALS + FLOW_EVALS + QR_EVALS
         else:
             print(f"No evals defined for {assistant_key}")
             return
@@ -658,6 +666,218 @@ async def cmd_status():
         print()
 
 
+async def cmd_create_squad():
+    """Create a full staging squad with cloned assistants and assign test phone number"""
+    headers = {
+        "Authorization": f"Bearer {VAPI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # Check if staging squad already exists
+        response = await client.get(f"{VAPI_BASE_URL}/squad", headers=headers)
+        for s in response.json():
+            if s.get("name") == STAGING_SQUAD_NAME:
+                print(f"Staging squad already exists: {STAGING_SQUAD_NAME} ({s['id']})")
+                print("Use 'teardown-squad' first if you want to recreate it.")
+                return
+
+        # Step 1: Clone all production assistants → staging
+        print("Step 1: Cloning production assistants...")
+        staging_ids = {}
+
+        for key, prod_name in ASSISTANT_MAP.items():
+            stg_name = staging_name(prod_name)
+
+            # Check if staging already exists
+            existing = await find_assistant(client, headers, stg_name)
+            if existing:
+                print(f"  ✓ {stg_name} already exists ({existing['id']})")
+                staging_ids[key] = existing["id"]
+                continue
+
+            # Get production config
+            prod = await find_assistant(client, headers, prod_name)
+            if not prod:
+                print(f"  ✗ Production assistant not found: {prod_name}")
+                continue
+
+            # Clone it
+            excluded_keys = {"id", "orgId", "createdAt", "updatedAt", "isServerUrlSecretSet"}
+            staging_config = {k: v for k, v in prod.items() if k not in excluded_keys}
+            staging_config["name"] = stg_name
+
+            resp = await client.post(
+                f"{VAPI_BASE_URL}/assistant",
+                headers=headers,
+                json=staging_config
+            )
+
+            if resp.status_code == 201:
+                result = resp.json()
+                staging_ids[key] = result["id"]
+                print(f"  ✓ Created {stg_name} ({result['id']})")
+            else:
+                print(f"  ✗ Failed to create {stg_name}: {resp.status_code}")
+                print(f"    {resp.text[:200]}")
+
+        if len(staging_ids) != len(ASSISTANT_MAP):
+            print("\n✗ Not all assistants were cloned. Fix errors above and retry.")
+            return
+
+        # Step 2: Create staging squad
+        print("\nStep 2: Creating staging squad...")
+
+        # Build member list — greeter routes to staging assistant names
+        greeter_destinations = []
+        for key, prod_name in ASSISTANT_MAP.items():
+            if key == "greeter":
+                continue
+            greeter_destinations.append({
+                "message": "",
+                "type": "assistant",
+                "assistantName": staging_name(prod_name),
+            })
+
+        members = [
+            {
+                "assistantId": staging_ids["greeter"],
+                "assistantDestinations": greeter_destinations,
+            }
+        ]
+        for key in ["voice_notes", "site_progress", "timesheet"]:
+            members.append({
+                "assistantId": staging_ids[key],
+                "assistantDestinations": [],
+            })
+
+        squad_resp = await client.post(
+            f"{VAPI_BASE_URL}/squad",
+            headers=headers,
+            json={
+                "name": STAGING_SQUAD_NAME,
+                "members": members,
+            }
+        )
+
+        if squad_resp.status_code != 201:
+            print(f"  ✗ Failed to create squad: {squad_resp.status_code}")
+            print(f"    {squad_resp.text[:300]}")
+            return
+
+        staging_squad_id = squad_resp.json()["id"]
+        print(f"  ✓ Created staging squad ({staging_squad_id})")
+
+        # Step 3: Point JOURN3Y phone number to staging squad
+        print("\nStep 3: Assigning JOURN3Y phone to staging squad...")
+
+        phone_resp = await client.patch(
+            f"{VAPI_BASE_URL}/phone-number/{TEST_PHONE_NUMBER_ID}",
+            headers=headers,
+            json={
+                "squadId": staging_squad_id,
+                "assistantId": None,
+            }
+        )
+
+        if phone_resp.status_code == 200:
+            phone_data = phone_resp.json()
+            print(f"  ✓ Phone {phone_data.get('number')} → staging squad")
+        else:
+            print(f"  ✗ Failed to reassign phone: {phone_resp.status_code}")
+            print(f"    {phone_resp.text[:200]}")
+
+        # Summary
+        print()
+        print("=" * 60)
+        print("STAGING SQUAD READY")
+        print("=" * 60)
+        print(f"  Squad: {STAGING_SQUAD_NAME} ({staging_squad_id})")
+        for key, sid in staging_ids.items():
+            print(f"  {key}: {sid}")
+        print()
+        print(f"  Call +61468086094 to test the staging squad.")
+        print(f"  Use 'push' to update individual assistants.")
+        print(f"  Use 'eval' to run evals against staging.")
+        print()
+        print("  When done: python scripts/staging.py teardown-squad")
+
+
+async def cmd_teardown_squad():
+    """Delete staging squad, all staging assistants, point phone back to production"""
+    headers = {
+        "Authorization": f"Bearer {VAPI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # Find staging squad
+        response = await client.get(f"{VAPI_BASE_URL}/squad", headers=headers)
+        staging_squad = None
+        for s in response.json():
+            if s.get("name") == STAGING_SQUAD_NAME:
+                staging_squad = s
+                break
+
+        if not staging_squad:
+            print("No staging squad found.")
+            # Still check for orphaned staging assistants
+        else:
+            print(f"Found staging squad: {staging_squad['id']}")
+
+        # Step 1: Point phone back to production
+        print("\nStep 1: Restoring phone to production squad...")
+        phone_resp = await client.patch(
+            f"{VAPI_BASE_URL}/phone-number/{TEST_PHONE_NUMBER_ID}",
+            headers=headers,
+            json={
+                "squadId": PROD_SQUAD_ID,
+                "assistantId": None,
+            }
+        )
+
+        if phone_resp.status_code == 200:
+            print(f"  ✓ Phone → production squad ({PROD_SQUAD_ID})")
+        else:
+            print(f"  ✗ Failed: {phone_resp.status_code}")
+
+        # Step 2: Delete staging squad
+        if staging_squad:
+            print("\nStep 2: Deleting staging squad...")
+            del_resp = await client.delete(
+                f"{VAPI_BASE_URL}/squad/{staging_squad['id']}",
+                headers=headers
+            )
+            if del_resp.status_code == 200:
+                print(f"  ✓ Deleted squad {STAGING_SQUAD_NAME}")
+            else:
+                print(f"  ✗ Failed: {del_resp.status_code}")
+
+        # Step 3: Delete staging assistants
+        print("\nStep 3: Cleaning up staging assistants...")
+        for key, prod_name in ASSISTANT_MAP.items():
+            stg_name = staging_name(prod_name)
+            staging = await find_assistant(client, headers, stg_name)
+            if staging:
+                del_resp = await client.delete(
+                    f"{VAPI_BASE_URL}/assistant/{staging['id']}",
+                    headers=headers
+                )
+                if del_resp.status_code == 200:
+                    print(f"  ✓ Deleted {stg_name}")
+                else:
+                    print(f"  ✗ Failed to delete {stg_name}: {del_resp.status_code}")
+            else:
+                print(f"  - {stg_name} not found (already cleaned)")
+
+        print()
+        print("=" * 60)
+        print("STAGING SQUAD TORN DOWN")
+        print("=" * 60)
+        print(f"  Phone restored to production squad.")
+        print(f"  All staging assistants deleted.")
+
+
 async def main():
     parser = argparse.ArgumentParser(
         description="VAPI Assistant Staging Pipeline",
@@ -676,7 +896,8 @@ Workflow:
 
     parser.add_argument(
         "command",
-        choices=["create", "push", "eval", "diff", "promote", "cleanup", "status"],
+        choices=["create", "push", "eval", "diff", "promote", "cleanup", "status",
+                 "create-squad", "teardown-squad"],
         help="Action to perform"
     )
     parser.add_argument(
@@ -712,6 +933,10 @@ Workflow:
         await cmd_cleanup(args.assistant)
     elif args.command == "status":
         await cmd_status()
+    elif args.command == "create-squad":
+        await cmd_create_squad()
+    elif args.command == "teardown-squad":
+        await cmd_teardown_squad()
 
 
 if __name__ == "__main__":
