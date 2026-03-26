@@ -362,7 +362,6 @@ async def authenticate_by_phone(request: dict):
                         "tenant_name": user['tenants']['name'],
                         "tenant_timezone": tenant_timezone_str,
                         "current_date": current_date,
-                        "current_time": current_time,
                         "current_datetime": current_datetime_display,
                         "day_of_week": day_of_week,
                         "phone_number": user['phone_number'],

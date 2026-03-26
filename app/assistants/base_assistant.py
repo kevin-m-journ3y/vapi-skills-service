@@ -116,7 +116,7 @@ class BaseAssistant(ABC):
             "language": "en",
             # Audio processing settings for noisy construction environments
             "smartFormat": True,  # Better formatting of numbers, dates, times
-            "endpointing": 400,  # ms of silence before finalizing (lower = more responsive)
+            "endpointing": 500,  # ms of silence before finalizing (was 400 — raised to max allowed by VAPI to give users breathing room)
             # Nova-3 Keyterm Prompting (replaces keywords parameter)
             # Keyterms preserve formatting and support multi-word phrases
             "keyterm": [
@@ -193,6 +193,21 @@ class BaseAssistant(ABC):
                 "correct",
                 "that's right",
                 "that's it",
+                # ===========================================
+                # CONFIRMATION COMMANDS (prevent "save it" → "David" etc)
+                # ===========================================
+                "save it",
+                "save",
+                "all done",
+                "all good",
+                "hold on",
+                "that's right",
+                # ===========================================
+                # TIME-RELATED (prevent "four" → garbled)
+                # ===========================================
+                "four",
+                "four thirty",
+                "three thirty",
             ]
         }
 
@@ -232,7 +247,7 @@ class BaseAssistant(ABC):
             Start speaking plan config
         """
         return {
-            "waitSeconds": 1.5,  # Wait 1.5 seconds after user stops before responding
+            "waitSeconds": 2.0,  # Wait 2s after user stops before responding (was 1.5 — raised so users aren't cut off mid-description)
             "smartEndpointingEnabled": True  # Use AI to detect natural conversation pauses
         }
 

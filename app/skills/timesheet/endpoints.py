@@ -71,7 +71,12 @@ async def get_session_context_by_call_id(vapi_call_id: str) -> Optional[Dict]:
 
 def calculate_hours_worked(start_time: str, end_time: str) -> float:
     """
-    Calculate hours worked from start and end times
+    Calculate hours worked from start and end times.
+
+    Includes a PM auto-correction: if the end time is before the start time
+    and adding 12 hours to the end produces a reasonable shift (≤14h),
+    assume the user meant PM. This catches the common case where a user says
+    "3:30" meaning 15:30 but the LLM sends "03:30".
 
     Args:
         start_time: Time in HH:MM format
@@ -84,8 +89,17 @@ def calculate_hours_worked(start_time: str, end_time: str) -> float:
         start = datetime.strptime(start_time, "%H:%M")
         end = datetime.strptime(end_time, "%H:%M")
 
-        # Handle case where end time is past midnight
         if end < start:
+            # Try adding 12 hours (user likely meant PM)
+            end_pm = end.replace(hour=end.hour + 12)
+            pm_hours = (end_pm - start).total_seconds() / 3600
+            if 0 < pm_hours <= 14:
+                logger.info(
+                    f"PM auto-correction: {end_time} → {end_pm.strftime('%H:%M')} "
+                    f"(hours: {round(pm_hours, 2)} instead of overnight calc)"
+                )
+                return round(pm_hours, 2)
+            # Genuinely overnight (e.g. night shift) — keep original logic
             end = end.replace(day=start.day + 1)
 
         duration = end - start

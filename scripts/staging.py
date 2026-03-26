@@ -208,6 +208,14 @@ async def cmd_push(assistant_key: str, summary: str = ""):
         if new_first_message is not None:
             update_payload["firstMessage"] = new_first_message
 
+        # Also push transcriber and speaking plan configs from code
+        if hasattr(assistant_obj, 'get_transcriber_config'):
+            update_payload["transcriber"] = assistant_obj.get_transcriber_config()
+        if hasattr(assistant_obj, 'get_start_speaking_plan'):
+            update_payload["startSpeakingPlan"] = assistant_obj.get_start_speaking_plan()
+        if hasattr(assistant_obj, 'get_stop_speaking_plan'):
+            update_payload["stopSpeakingPlan"] = assistant_obj.get_stop_speaking_plan()
+
         response = await client.patch(
             f"{VAPI_BASE_URL}/assistant/{staging_id}",
             headers=headers,
@@ -545,11 +553,18 @@ async def cmd_promote(assistant_key: str):
             print("Cancelled.")
             return
 
+        # Build promote payload: model + transcriber + speaking plans
+        promote_payload = {"model": promoted_model}
+        # Carry over transcriber and speaking plan if staging has them
+        for field in ("transcriber", "startSpeakingPlan", "stopSpeakingPlan"):
+            if field in stg_full:
+                promote_payload[field] = stg_full[field]
+
         # Update production
         response = await client.patch(
             f"{VAPI_BASE_URL}/assistant/{prod_id}",
             headers=headers,
-            json={"model": promoted_model}
+            json=promote_payload
         )
 
         if response.status_code == 200:

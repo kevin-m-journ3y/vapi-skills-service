@@ -736,6 +736,210 @@ Output exactly one word: pass or fail"""
                 }
             }
         ]
+    },
+    {
+        "name": "timesheet_partial_work_description",
+        "description": "User gives work description in two parts - Jill should accept the continuation and include both parts",
+        "messages": [
+            {"role": "user", "content": "Bishops Avenue"},
+            {
+                "role": "assistant",
+                "judgePlan": {
+                    "type": "ai",
+                    "model": {
+                        "provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "messages": [{
+                            "role": "system",
+                            "content": "PASS if assistant acknowledges site and asks about times. Output: pass or fail"
+                        }]
+                    }
+                }
+            },
+            {"role": "user", "content": "7 to 3:30"},
+            {
+                "role": "assistant",
+                "judgePlan": {
+                    "type": "ai",
+                    "model": {
+                        "provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "messages": [{
+                            "role": "system",
+                            "content": "PASS if assistant asks about work description. Output: pass or fail"
+                        }]
+                    }
+                }
+            },
+            {"role": "user", "content": "framing and plastering"},
+            {
+                "role": "assistant",
+                "judgePlan": {
+                    "type": "ai",
+                    "model": {
+                        "provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "messages": [{
+                            "role": "system",
+                            "content": "PASS if assistant asks about escalation or proceeds to readback. Output: pass or fail"
+                        }]
+                    }
+                }
+            },
+            {"role": "user", "content": "oh and also some electrical work and fixed the back door"},
+            {
+                "role": "assistant",
+                "judgePlan": {
+                    "type": "ai",
+                    "model": {
+                        "provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "messages": [{
+                            "role": "system",
+                            "content": """You are an LLM-Judge. The user initially said "framing and plastering" as their work description. Now they're adding more: "oh and also some electrical work and fixed the back door". The assistant should incorporate this additional info.
+
+PASS criteria (ANY counts as pass):
+- The assistant acknowledges the additional work and includes it (e.g. "Got it, adding that")
+- The assistant reads back a description that includes BOTH the original AND new items (framing, plastering, electrical, back door)
+- The assistant asks if there's anything else to add
+
+FAIL criteria (ALL must be true to fail):
+- The assistant ignores the additional work description
+- The assistant only mentions the original items and drops the new ones
+- The assistant is confused by the continuation
+
+Output exactly one word: pass or fail"""
+                        }]
+                    }
+                }
+            }
+        ]
+    },
+    {
+        "name": "timesheet_hold_on_respected",
+        "description": "User says 'hold on' after save - Jill should wait patiently, not repeat the question",
+        "messages": [
+            {"role": "user", "content": "Bishops Avenue, 7 to 3:30, did some framing"},
+            {
+                "role": "assistant",
+                "judgePlan": {
+                    "type": "ai",
+                    "model": {
+                        "provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "messages": [{
+                            "role": "system",
+                            "content": "PASS if assistant proceeds with the timesheet flow (asks about escalation, or reads back entry, or asks about times). Output: pass or fail"
+                        }]
+                    }
+                }
+            },
+            {"role": "user", "content": "all good, save it"},
+            {
+                "role": "assistant",
+                "judgePlan": {
+                    "type": "ai",
+                    "model": {
+                        "provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "messages": [{
+                            "role": "system",
+                            "content": "PASS if assistant saves and asks about next site. Output: pass or fail"
+                        }]
+                    }
+                }
+            },
+            {"role": "user", "content": "hold on"},
+            {
+                "role": "assistant",
+                "judgePlan": {
+                    "type": "ai",
+                    "model": {
+                        "provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "messages": [{
+                            "role": "system",
+                            "content": """You are an LLM-Judge. The user said "hold on" after being asked about their next site. The assistant should wait patiently.
+
+PASS criteria (ANY counts as pass):
+- The assistant says something like "No rush", "Take your time", "No worries", "Sure" and waits
+- The assistant acknowledges they need a moment and doesn't repeat the question
+- The assistant gives a brief, patient response
+
+FAIL criteria (ANY triggers failure):
+- The assistant repeats "Tell me your next site or say all done"
+- The assistant ignores "hold on" and asks another question
+- The assistant says goodbye or tries to end the call
+
+Output exactly one word: pass or fail"""
+                        }]
+                    }
+                }
+            }
+        ]
+    },
+    {
+        "name": "timesheet_save_it_misheard_as_david",
+        "description": "User says 'David' after readback (common mishearing of 'save it') - Jill should treat as confirmation",
+        "messages": [
+            {"role": "user", "content": "Bishops Avenue, 7 to 3:30, framing work"},
+            {
+                "role": "assistant",
+                "judgePlan": {
+                    "type": "ai",
+                    "model": {
+                        "provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "messages": [{
+                            "role": "system",
+                            "content": "PASS if assistant proceeds with the timesheet flow. Output: pass or fail"
+                        }]
+                    }
+                }
+            },
+            {"role": "user", "content": "all good"},
+            {
+                "role": "assistant",
+                "judgePlan": {
+                    "type": "ai",
+                    "model": {
+                        "provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "messages": [{
+                            "role": "system",
+                            "content": "PASS if assistant reads back the entry and asks for confirmation. Output: pass or fail"
+                        }]
+                    }
+                }
+            },
+            {"role": "user", "content": "David"},
+            {
+                "role": "assistant",
+                "judgePlan": {
+                    "type": "ai",
+                    "model": {
+                        "provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "messages": [{
+                            "role": "system",
+                            "content": """You are an LLM-Judge. The user said "David" immediately after a readback/confirmation prompt. In this voice AI system, "David" is a common speech-to-text mishearing of "save it".
+
+PASS criteria (ANY counts as pass):
+- The assistant treats "David" as a confirmation and proceeds to save
+- The assistant saves the entry and moves on to ask about next site
+- The assistant makes a tool call to save (this means it understood)
+
+FAIL criteria (ANY triggers failure):
+- The assistant asks "who is David?" or is confused by the name
+- The assistant asks the user to repeat or clarify
+- The assistant does not proceed with saving
+
+Output exactly one word: pass or fail"""
+                        }]
+                    }
+                }
+            }
+        ]
     }
 ]
 
