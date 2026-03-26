@@ -59,7 +59,7 @@ class TimesheetAssistant(BaseAssistant):
         return {
             "provider": "openai",
             "model": "gpt-4o-mini",
-            "temperature": 0.7,
+            "temperature": 0.4,
             "maxTokens": 1200
         }
 
