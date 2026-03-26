@@ -200,8 +200,6 @@ class BaseAssistant(ABC):
                 "save",
                 "all done",
                 "all good",
-                "hold on",
-                "that's right",
                 # ===========================================
                 # TIME-RELATED (prevent "four" → garbled)
                 # ===========================================
