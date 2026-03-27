@@ -1,5 +1,5 @@
 # app/admin/routes.py - Admin UI routes
-from fastapi import APIRouter, Request, Depends, HTTPException, Header, BackgroundTasks
+from fastapi import APIRouter, Request, Depends, HTTPException, Header, BackgroundTasks, UploadFile, File, Form
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, RedirectResponse
 import httpx
@@ -2505,3 +2505,1447 @@ async def get_prompt_changes(request: Request):
     except Exception as e:
         logger.error(f"Error fetching prompt changes: {e}")
         return {"success": False, "error": str(e)}
+
+
+# ============================================
+# TENANT REPORT CONFIGURATION
+# ============================================
+
+REPORT_TYPES = {
+    "timesheets": "Timesheets",
+    "qr_signons": "QR Sign-Ons",
+    "voice_notes": "Voice Notes",
+    "payroll_weekly": "Weekly Payroll Summary",
+    "site_weekly": "Site Weekly Report",
+    "site_progress": "Site Progress Report",
+}
+
+@router.get("/admin/tenants/{tenant_id}/reports")
+async def get_tenant_report_config(tenant_id: str, request: Request):
+    """Get report configuration for a tenant"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_report_config",
+                headers=headers,
+                params={
+                    "tenant_id": f"eq.{tenant_id}",
+                    "select": "report_type,is_enabled"
+                }
+            )
+
+            enabled_map = {}
+            if response.status_code == 200:
+                for row in response.json():
+                    enabled_map[row["report_type"]] = row["is_enabled"]
+
+            reports = []
+            for key, label in REPORT_TYPES.items():
+                reports.append({
+                    "report_type": key,
+                    "label": label,
+                    "is_enabled": enabled_map.get(key, False)
+                })
+
+            return {"success": True, "reports": reports}
+
+    except Exception as e:
+        logger.error(f"Error fetching tenant report config: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/admin/tenants/{tenant_id}/reports/{report_type}/toggle")
+async def toggle_tenant_report(tenant_id: str, report_type: str, request: Request):
+    """Toggle a report on/off for a tenant (super admin only)"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    if report_type not in REPORT_TYPES:
+        return {"success": False, "error": f"Unknown report type: {report_type}"}
+
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal"
+            }
+
+            # Check if config row exists
+            check = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_report_config",
+                headers={
+                    "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={
+                    "tenant_id": f"eq.{tenant_id}",
+                    "report_type": f"eq.{report_type}",
+                    "select": "id,is_enabled"
+                }
+            )
+
+            if check.status_code == 200 and check.json():
+                # Toggle existing
+                existing = check.json()[0]
+                new_val = not existing["is_enabled"]
+                await client.patch(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_report_config",
+                    headers=headers,
+                    params={
+                        "id": f"eq.{existing['id']}"
+                    },
+                    json={"is_enabled": new_val, "updated_at": datetime.now(timezone.utc).isoformat()}
+                )
+                return {"success": True, "is_enabled": new_val}
+            else:
+                # Create new (default to enabled)
+                await client.post(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_report_config",
+                    headers=headers,
+                    json={
+                        "tenant_id": tenant_id,
+                        "report_type": report_type,
+                        "is_enabled": True
+                    }
+                )
+                return {"success": True, "is_enabled": True}
+
+    except Exception as e:
+        logger.error(f"Error toggling tenant report: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def get_enabled_reports_for_tenant(tenant_id: str) -> list:
+    """Helper: get list of enabled report_type strings for a tenant"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_report_config",
+                headers={
+                    "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={
+                    "tenant_id": f"eq.{tenant_id}",
+                    "is_enabled": "eq.true",
+                    "select": "report_type"
+                }
+            )
+            if response.status_code == 200:
+                return [r["report_type"] for r in response.json()]
+    except Exception:
+        pass
+    return []
+
+
+# ============================================
+# NEW REPORTS - PAGE ROUTES
+# ============================================
+
+@router.get("/admin/reports/payroll", response_class=HTMLResponse)
+async def payroll_report_page(request: Request):
+    """Weekly payroll report page"""
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
+    return templates.TemplateResponse(
+        "reports/payroll.html",
+        {"request": request, "page_title": "Weekly Payroll Summary"}
+    )
+
+
+@router.get("/admin/reports/site-weekly", response_class=HTMLResponse)
+async def site_weekly_report_page(request: Request):
+    """Site weekly report page"""
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
+    return templates.TemplateResponse(
+        "reports/site_weekly.html",
+        {"request": request, "page_title": "Site Weekly Report"}
+    )
+
+
+@router.get("/admin/reports/site-progress", response_class=HTMLResponse)
+async def site_progress_report_page(request: Request):
+    """Site progress report page"""
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
+    return templates.TemplateResponse(
+        "reports/site_progress.html",
+        {"request": request, "page_title": "Site Progress Report"}
+    )
+
+
+@router.get("/admin/reports/enabled")
+async def get_enabled_reports(request: Request):
+    """Get which reports are enabled for the current user's tenant"""
+    user_session = await get_session_user(request)
+    tenant_id = user_session.get("tenant_id")
+    is_super_admin = user_session.get("role") == "super_admin"
+
+    # Super admin sees all reports
+    if is_super_admin and not tenant_id:
+        return {"success": True, "reports": list(REPORT_TYPES.keys())}
+
+    if not tenant_id:
+        return {"success": True, "reports": []}
+
+    enabled = await get_enabled_reports_for_tenant(tenant_id)
+    return {"success": True, "reports": enabled}
+
+
+# ============================================
+# REPORT 1: WEEKLY PAYROLL - DATA + PDF
+# ============================================
+
+@router.get("/admin/reports/payroll/data")
+async def get_payroll_data(
+    request: Request,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+):
+    """Get payroll data for a week - person x day grid"""
+    user_session = await get_session_user(request)
+    session_tenant_id = user_session.get("tenant_id")
+    is_super_admin = user_session.get("role") == "super_admin"
+
+    if not is_super_admin:
+        tenant_id = session_tenant_id
+
+    if not tenant_id:
+        return {"success": False, "error": "Please select a tenant"}
+
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            params = {
+                "select": "user_id,work_date,hours_worked,users(name)",
+                "tenant_id": f"eq.{tenant_id}",
+                "order": "work_date.asc"
+            }
+
+            if start_date and end_date:
+                params["and"] = f"(work_date.gte.{start_date},work_date.lte.{end_date})"
+
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/timesheets",
+                headers=headers,
+                params=params
+            )
+
+            if response.status_code != 200:
+                return {"success": False, "error": "Failed to fetch timesheets"}
+
+            entries = response.json()
+
+            # Build user map
+            users = {}
+            user_hours = {}  # user_id -> {date: hours}
+            for entry in entries:
+                uid = entry["user_id"]
+                uname = entry.get("users", {}).get("name", "Unknown")
+                users[uid] = uname
+                if uid not in user_hours:
+                    user_hours[uid] = {}
+                d = entry["work_date"]
+                user_hours[uid][d] = user_hours[uid].get(d, 0) + float(entry["hours_worked"])
+
+            # Build grid data
+            grid = []
+            for uid, name in sorted(users.items(), key=lambda x: x[1]):
+                grid.append({
+                    "user_id": uid,
+                    "name": name,
+                    "days": user_hours.get(uid, {})
+                })
+
+            # All dates in range
+            all_dates = sorted(set(e["work_date"] for e in entries))
+
+            return {
+                "success": True,
+                "grid": grid,
+                "dates": all_dates,
+                "total_entries": len(entries)
+            }
+
+    except Exception as e:
+        logger.error(f"Error fetching payroll data: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/admin/reports/payroll/pdf")
+async def download_payroll_pdf(
+    request: Request,
+    start_date: str = "",
+    end_date: str = "",
+    break_minutes: int = 0,
+    break_threshold: float = 4.0,
+    tenant_id: Optional[str] = None,
+):
+    """Generate and download payroll PDF"""
+    from fastapi.responses import Response
+    from app.admin.pdf_generator import generate_payroll_pdf
+    from datetime import date as date_type
+
+    user_session = await get_session_user(request)
+    session_tenant_id = user_session.get("tenant_id")
+    is_super_admin = user_session.get("role") == "super_admin"
+
+    if not is_super_admin:
+        tenant_id = session_tenant_id
+
+    if not tenant_id or not start_date or not end_date:
+        raise HTTPException(status_code=400, detail="tenant_id, start_date and end_date required")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            # Get tenant name
+            tenant_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenants",
+                headers=headers,
+                params={"id": f"eq.{tenant_id}", "select": "name"}
+            )
+            tenant_name = "Unknown Company"
+            if tenant_resp.status_code == 200 and tenant_resp.json():
+                tenant_name = tenant_resp.json()[0]["name"]
+
+            # Get timesheet data
+            params = {
+                "select": "user_id,work_date,hours_worked,users(name)",
+                "tenant_id": f"eq.{tenant_id}",
+                "and": f"(work_date.gte.{start_date},work_date.lte.{end_date})",
+                "order": "work_date.asc"
+            }
+
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/timesheets",
+                headers=headers,
+                params=params
+            )
+
+            if response.status_code != 200:
+                raise HTTPException(status_code=500, detail="Failed to fetch timesheets")
+
+            entries = response.json()
+            users = {}
+            for entry in entries:
+                uid = entry["user_id"]
+                users[uid] = entry.get("users", {}).get("name", "Unknown")
+
+            week_start = date_type.fromisoformat(start_date)
+            week_end = date_type.fromisoformat(end_date)
+
+            pdf_bytes = generate_payroll_pdf(
+                tenant_name=tenant_name,
+                week_start=week_start,
+                week_end=week_end,
+                entries=entries,
+                users=users,
+                break_minutes=break_minutes,
+                break_threshold_hours=break_threshold,
+            )
+
+            filename = f"payroll_{tenant_name.replace(' ', '_')}_{start_date}_to_{end_date}.pdf"
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating payroll PDF: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# REPORT 2: SITE WEEKLY - DATA + PDF
+# ============================================
+
+@router.get("/admin/reports/site-weekly/data")
+async def get_site_weekly_data(
+    request: Request,
+    site_id: str = "",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+):
+    """Get site weekly report data - hours + verbal updates"""
+    user_session = await get_session_user(request)
+    session_tenant_id = user_session.get("tenant_id")
+    is_super_admin = user_session.get("role") == "super_admin"
+
+    if not is_super_admin:
+        tenant_id = session_tenant_id
+
+    if not tenant_id:
+        return {"success": False, "error": "Please select a tenant"}
+    if not site_id:
+        return {"success": False, "error": "Please select a site"}
+
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            # Get site info
+            site_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/entities",
+                headers=headers,
+                params={"id": f"eq.{site_id}", "select": "id,name,address"}
+            )
+            site_info = {"name": "Unknown Site", "address": ""}
+            if site_resp.status_code == 200 and site_resp.json():
+                site_info = site_resp.json()[0]
+
+            # Get timesheets for this site
+            ts_params = {
+                "select": "user_id,work_date,start_time,end_time,hours_worked,work_description,plans_for_tomorrow,users(name)",
+                "tenant_id": f"eq.{tenant_id}",
+                "site_id": f"eq.{site_id}",
+                "order": "work_date.asc"
+            }
+            if start_date and end_date:
+                ts_params["and"] = f"(work_date.gte.{start_date},work_date.lte.{end_date})"
+
+            ts_response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/timesheets",
+                headers=headers,
+                params=ts_params
+            )
+            timesheets = ts_response.json() if ts_response.status_code == 200 else []
+
+            # Get site progress updates
+            su_params = {
+                "select": "id,update_date,main_focus,work_progress,issues,delays,staffing,site_conditions,follow_up_actions,is_wet_weather_closure,has_urgent_issues,has_delays,has_safety_concerns,identified_blockers,flagged_concerns,extracted_action_items,summary_brief,user_id,users(name)",
+                "tenant_id": f"eq.{tenant_id}",
+                "site_id": f"eq.{site_id}",
+                "order": "update_date.asc"
+            }
+            if start_date and end_date:
+                su_params["and"] = f"(update_date.gte.{start_date},update_date.lte.{end_date})"
+
+            su_response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/site_progress_updates",
+                headers=headers,
+                params=su_params
+            )
+            site_updates = su_response.json() if su_response.status_code == 200 else []
+
+            # Fetch site notes for this site + period
+            sn_params = {
+                "select": "id,note_text,created_at,admin_user_id,admin_users(username)",
+                "tenant_id": f"eq.{tenant_id}",
+                "site_id": f"eq.{site_id}",
+                "order": "created_at.asc"
+            }
+            if start_date and end_date:
+                sn_params["and"] = f"(created_at.gte.{start_date}T00:00:00,created_at.lte.{end_date}T23:59:59)"
+
+            sn_response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/site_notes",
+                headers=headers,
+                params=sn_params
+            )
+            site_notes = sn_response.json() if sn_response.status_code == 200 else []
+
+            # Build users map
+            users = {}
+            for entry in timesheets:
+                uid = entry["user_id"]
+                users[uid] = entry.get("users", {}).get("name", "Unknown")
+            for update in site_updates:
+                uid = update.get("user_id")
+                if uid:
+                    users[uid] = update.get("users", {}).get("name", users.get(uid, "Unknown"))
+
+            # Build hours grid
+            user_hours = {}
+            for entry in timesheets:
+                uid = entry["user_id"]
+                if uid not in user_hours:
+                    user_hours[uid] = {}
+                d = entry["work_date"]
+                user_hours[uid][d] = user_hours[uid].get(d, 0) + float(entry["hours_worked"])
+
+            grid = []
+            for uid in sorted(users.keys(), key=lambda u: users.get(u, "")):
+                grid.append({
+                    "user_id": uid,
+                    "name": users[uid],
+                    "days": user_hours.get(uid, {})
+                })
+
+            all_dates = sorted(set(e["work_date"] for e in timesheets)) if timesheets else []
+
+            # Extract raw work items for AI summarisation
+            raw_work_items = []
+            for entry in timesheets:
+                desc = entry.get("work_description", "")
+                if desc and desc.strip():
+                    raw_work_items.append({
+                        "text": desc.strip(),
+                        "user": users.get(entry["user_id"], "Unknown"),
+                        "date": entry["work_date"]
+                    })
+            for update in site_updates:
+                for field in ["work_progress", "main_focus"]:
+                    val = update.get(field, "")
+                    if val and val.strip():
+                        raw_work_items.append({
+                            "text": val.strip(),
+                            "user": users.get(update.get("user_id"), ""),
+                            "date": update.get("update_date", "")
+                        })
+
+            # Add site notes to raw work items (fed into AI alongside verbal updates)
+            for note in site_notes:
+                note_text = note.get("note_text", "")
+                if note_text and note_text.strip():
+                    author = note.get("admin_users", {}).get("username", "Admin")
+                    note_date = note.get("created_at", "")[:10]  # Extract date from timestamp
+                    raw_work_items.append({
+                        "text": f"[Site Note] {note_text.strip()}",
+                        "user": author,
+                        "date": note_date
+                    })
+
+            # Fetch weather data for the site (cached in Supabase)
+            from app.admin.weather import get_weather_for_site
+            weather = {}
+            site_address = site_info.get("address", "")
+            if site_address and start_date and end_date:
+                # Get tenant timezone for country code derivation
+                tenant_resp = await client.get(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/tenants",
+                    headers=headers,
+                    params={"id": f"eq.{tenant_id}", "select": "timezone"}
+                )
+                tenant_tz = ""
+                if tenant_resp.status_code == 200 and tenant_resp.json():
+                    tenant_tz = tenant_resp.json()[0].get("timezone", "")
+                weather = await get_weather_for_site(
+                    site_id, site_address, start_date, end_date,
+                    tenant_timezone=tenant_tz,
+                )
+
+            # AI-powered categorisation and cleanup (cached in Supabase)
+            from app.admin.work_summary import summarise_work_items
+            work_categories = await summarise_work_items(
+                raw_work_items, users,
+                tenant_id=tenant_id, site_id=site_id,
+                week_start=start_date or "", week_end=end_date or "",
+            )
+
+            risks = []
+            for update in site_updates:
+                if update.get("issues"):
+                    risks.append({"type": "Issue", "text": update["issues"], "date": update.get("update_date", "")})
+                if update.get("delays"):
+                    risks.append({"type": "Delay", "text": update["delays"], "date": update.get("update_date", "")})
+                for b in (update.get("identified_blockers") or []):
+                    if isinstance(b, dict):
+                        risks.append({"type": b.get("blocker_type", "Blocker"), "text": b.get("description", ""), "date": update.get("update_date", "")})
+                for c in (update.get("flagged_concerns") or []):
+                    if isinstance(c, dict):
+                        risks.append({"type": c.get("severity", "Concern"), "text": c.get("description", ""), "date": update.get("update_date", "")})
+
+            plans = []
+            for entry in timesheets:
+                p = entry.get("plans_for_tomorrow", "")
+                if p and p.strip():
+                    plans.append({"text": p.strip(), "date": entry["work_date"]})
+            for update in site_updates:
+                fa = update.get("follow_up_actions", "")
+                if fa and fa.strip():
+                    plans.append({"text": fa.strip(), "date": update.get("update_date", "")})
+                for a in (update.get("extracted_action_items") or []):
+                    if isinstance(a, dict):
+                        plans.append({"text": f"{a.get('action', '')} (Priority: {a.get('priority', 'normal')})", "date": update.get("update_date", "")})
+
+            conditions = []
+            for update in site_updates:
+                cond = update.get("site_conditions", "")
+                if cond and cond.strip():
+                    conditions.append({"text": cond.strip(), "date": update.get("update_date", "")})
+                if update.get("is_wet_weather_closure"):
+                    conditions.append({"text": "Wet weather closure", "date": update.get("update_date", "")})
+
+            total_hours = sum(float(e["hours_worked"]) for e in timesheets)
+
+            return {
+                "success": True,
+                "site": site_info,
+                "grid": grid,
+                "dates": all_dates,
+                "weather": weather,
+                "work_categories": work_categories,
+                "raw_work_items": raw_work_items,
+                "risks": risks,
+                "plans": plans,
+                "conditions": conditions,
+                "summary": {
+                    "total_hours": round(total_hours, 1),
+                    "total_workers": len(user_hours),
+                    "total_updates": len(site_updates),
+                    "has_risks": len(risks) > 0,
+                }
+            }
+
+    except Exception as e:
+        logger.error(f"Error fetching site weekly data: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/admin/reports/site-weekly/pdf")
+async def download_site_weekly_pdf(
+    request: Request,
+    site_id: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    tenant_id: Optional[str] = None,
+):
+    """Generate and download site weekly PDF"""
+    from fastapi.responses import Response
+    from app.admin.pdf_generator import generate_site_weekly_pdf
+    from datetime import date as date_type
+
+    user_session = await get_session_user(request)
+    session_tenant_id = user_session.get("tenant_id")
+    is_super_admin = user_session.get("role") == "super_admin"
+
+    if not is_super_admin:
+        tenant_id = session_tenant_id
+
+    if not tenant_id or not site_id or not start_date or not end_date:
+        raise HTTPException(status_code=400, detail="tenant_id, site_id, start_date and end_date required")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            # Get tenant name
+            tenant_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenants",
+                headers=headers,
+                params={"id": f"eq.{tenant_id}", "select": "name"}
+            )
+            tenant_name = "Unknown Company"
+            if tenant_resp.status_code == 200 and tenant_resp.json():
+                tenant_name = tenant_resp.json()[0]["name"]
+
+            # Get site info
+            site_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/entities",
+                headers=headers,
+                params={"id": f"eq.{site_id}", "select": "id,name,address"}
+            )
+            site_name = "Unknown Site"
+            site_address = ""
+            if site_resp.status_code == 200 and site_resp.json():
+                site_name = site_resp.json()[0].get("name", "Unknown Site")
+                site_address = site_resp.json()[0].get("address", "")
+
+            # Get timesheets
+            ts_params = {
+                "select": "user_id,work_date,hours_worked,work_description,plans_for_tomorrow,users(name)",
+                "tenant_id": f"eq.{tenant_id}",
+                "site_id": f"eq.{site_id}",
+                "and": f"(work_date.gte.{start_date},work_date.lte.{end_date})",
+                "order": "work_date.asc"
+            }
+            ts_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/timesheets",
+                headers=headers,
+                params=ts_params
+            )
+            timesheets = ts_resp.json() if ts_resp.status_code == 200 else []
+
+            # Get site progress updates
+            su_params = {
+                "select": "update_date,main_focus,work_progress,issues,delays,site_conditions,follow_up_actions,is_wet_weather_closure,has_urgent_issues,has_delays,has_safety_concerns,identified_blockers,flagged_concerns,extracted_action_items,user_id,users(name)",
+                "tenant_id": f"eq.{tenant_id}",
+                "site_id": f"eq.{site_id}",
+                "and": f"(update_date.gte.{start_date},update_date.lte.{end_date})",
+                "order": "update_date.asc"
+            }
+            su_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/site_progress_updates",
+                headers=headers,
+                params=su_params
+            )
+            site_updates = su_resp.json() if su_resp.status_code == 200 else []
+
+            # Build users map
+            users = {}
+            for e in timesheets:
+                users[e["user_id"]] = e.get("users", {}).get("name", "Unknown")
+            for u in site_updates:
+                if u.get("user_id"):
+                    users[u["user_id"]] = u.get("users", {}).get("name", users.get(u["user_id"], "Unknown"))
+
+            week_start = date_type.fromisoformat(start_date)
+            week_end = date_type.fromisoformat(end_date)
+
+            # Build AI-categorised work summary for the PDF
+            from app.admin.work_summary import summarise_work_items
+            raw_work_items = []
+            for entry in timesheets:
+                desc = entry.get("work_description", "")
+                if desc and desc.strip():
+                    raw_work_items.append({
+                        "text": desc.strip(),
+                        "user": users.get(entry["user_id"], "Unknown"),
+                        "date": entry.get("work_date", "")
+                    })
+            for update in site_updates:
+                for field in ["work_progress", "main_focus"]:
+                    val = update.get(field, "")
+                    if val and val.strip():
+                        raw_work_items.append({
+                            "text": val.strip(),
+                            "user": users.get(update.get("user_id"), ""),
+                            "date": update.get("update_date", "")
+                        })
+
+            # Fetch site notes for PDF
+            sn_params = {
+                "select": "note_text,created_at,admin_users(username)",
+                "tenant_id": f"eq.{tenant_id}",
+                "site_id": f"eq.{site_id}",
+                "and": f"(created_at.gte.{start_date}T00:00:00,created_at.lte.{end_date}T23:59:59)",
+            }
+            sn_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/site_notes",
+                headers=headers,
+                params=sn_params
+            )
+            for note in (sn_resp.json() if sn_resp.status_code == 200 else []):
+                nt = note.get("note_text", "")
+                if nt and nt.strip():
+                    raw_work_items.append({
+                        "text": f"[Site Note] {nt.strip()}",
+                        "user": note.get("admin_users", {}).get("username", "Admin"),
+                        "date": note.get("created_at", "")[:10]
+                    })
+
+            work_categories = await summarise_work_items(
+                raw_work_items, users,
+                tenant_id=tenant_id, site_id=site_id,
+                week_start=start_date, week_end=end_date,
+            )
+
+            # Fetch weather for PDF
+            from app.admin.weather import get_weather_for_site
+            tenant_tz_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenants",
+                headers=headers,
+                params={"id": f"eq.{tenant_id}", "select": "timezone"}
+            )
+            pdf_tenant_tz = ""
+            if tenant_tz_resp.status_code == 200 and tenant_tz_resp.json():
+                pdf_tenant_tz = tenant_tz_resp.json()[0].get("timezone", "")
+            weather = {}
+            if site_address:
+                weather = await get_weather_for_site(
+                    site_id, site_address, start_date, end_date,
+                    tenant_timezone=pdf_tenant_tz,
+                )
+
+            pdf_bytes = generate_site_weekly_pdf(
+                tenant_name=tenant_name,
+                site_name=site_name,
+                site_address=site_address,
+                week_start=week_start,
+                week_end=week_end,
+                timesheet_entries=timesheets,
+                site_updates=site_updates,
+                users=users,
+                work_categories=work_categories,
+                weather=weather,
+            )
+
+            filename = f"site_report_{site_name.replace(' ', '_')}_{start_date}_to_{end_date}.pdf"
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating site weekly PDF: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# REPORT 3: SITE PROGRESS - DATA + PDF
+# ============================================
+
+@router.get("/admin/reports/site-progress/data")
+async def get_site_progress_data(
+    request: Request,
+    site_id: str = "",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+):
+    """Get site progress data - multi-week breakdown"""
+    user_session = await get_session_user(request)
+    session_tenant_id = user_session.get("tenant_id")
+    is_super_admin = user_session.get("role") == "super_admin"
+
+    if not is_super_admin:
+        tenant_id = session_tenant_id
+
+    if not tenant_id:
+        return {"success": False, "error": "Please select a tenant"}
+    if not site_id:
+        return {"success": False, "error": "Please select a site"}
+
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            # Get site info
+            site_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/entities",
+                headers=headers,
+                params={"id": f"eq.{site_id}", "select": "id,name,address"}
+            )
+            site_info = {"name": "Unknown Site", "address": ""}
+            if site_resp.status_code == 200 and site_resp.json():
+                site_info = site_resp.json()[0]
+
+            # Get timesheets
+            ts_params = {
+                "select": "user_id,work_date,hours_worked,work_description,plans_for_tomorrow,users(name)",
+                "tenant_id": f"eq.{tenant_id}",
+                "site_id": f"eq.{site_id}",
+                "order": "work_date.asc"
+            }
+            if start_date and end_date:
+                ts_params["and"] = f"(work_date.gte.{start_date},work_date.lte.{end_date})"
+
+            ts_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/timesheets",
+                headers=headers,
+                params=ts_params
+            )
+            timesheets = ts_resp.json() if ts_resp.status_code == 200 else []
+
+            # Get site progress updates
+            su_params = {
+                "select": "update_date,main_focus,work_progress,issues,delays,site_conditions,follow_up_actions,is_wet_weather_closure,has_urgent_issues,has_delays,has_safety_concerns,identified_blockers,flagged_concerns,extracted_action_items,user_id",
+                "tenant_id": f"eq.{tenant_id}",
+                "site_id": f"eq.{site_id}",
+                "order": "update_date.asc"
+            }
+            if start_date and end_date:
+                su_params["and"] = f"(update_date.gte.{start_date},update_date.lte.{end_date})"
+
+            su_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/site_progress_updates",
+                headers=headers,
+                params=su_params
+            )
+            site_updates = su_resp.json() if su_resp.status_code == 200 else []
+
+            # Fetch site notes for this site + period
+            sn_params = {
+                "select": "id,note_text,created_at,admin_user_id,admin_users(username)",
+                "tenant_id": f"eq.{tenant_id}",
+                "site_id": f"eq.{site_id}",
+                "order": "created_at.asc"
+            }
+            if start_date and end_date:
+                sn_params["and"] = f"(created_at.gte.{start_date}T00:00:00,created_at.lte.{end_date}T23:59:59)"
+
+            sn_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/site_notes",
+                headers=headers,
+                params=sn_params
+            )
+            site_notes = sn_resp.json() if sn_resp.status_code == 200 else []
+
+            # Group into weeks (Mon-Sun)
+            from datetime import date as date_type, timedelta
+            weeks = {}
+
+            def get_week_start(d_str):
+                d = date_type.fromisoformat(d_str)
+                return d - timedelta(days=d.weekday())  # Monday
+
+            # Build users map from timesheets
+            users = {}
+            for entry in timesheets:
+                uid = entry["user_id"]
+                users[uid] = entry.get("users", {}).get("name", "Unknown")
+
+            # Group timesheets by week
+            for entry in timesheets:
+                ws = get_week_start(entry["work_date"])
+                we = ws + timedelta(days=6)
+                key = ws.isoformat()
+                if key not in weeks:
+                    weeks[key] = {
+                        "week_start": ws.isoformat(),
+                        "week_end": we.isoformat(),
+                        "hours": 0,
+                        "workers": set(),
+                        "work_descriptions": [],
+                        "raw_work_items": [],
+                        "plans": [],
+                        "risks": [],
+                        "conditions": [],
+                    }
+                weeks[key]["hours"] += float(entry["hours_worked"])
+                weeks[key]["workers"].add(entry["user_id"])
+                desc = entry.get("work_description", "")
+                if desc and desc.strip():
+                    weeks[key]["work_descriptions"].append(desc.strip())
+                    weeks[key]["raw_work_items"].append({
+                        "text": desc.strip(),
+                        "user": users.get(entry["user_id"], "Unknown"),
+                        "date": entry["work_date"]
+                    })
+                plan = entry.get("plans_for_tomorrow", "")
+                if plan and plan.strip():
+                    weeks[key]["plans"].append(plan.strip())
+
+            # Group site updates by week
+            for update in site_updates:
+                ud = update.get("update_date", "")
+                if not ud:
+                    continue
+                ws = get_week_start(ud)
+                we = ws + timedelta(days=6)
+                key = ws.isoformat()
+                if key not in weeks:
+                    weeks[key] = {
+                        "week_start": ws.isoformat(),
+                        "week_end": we.isoformat(),
+                        "hours": 0,
+                        "workers": set(),
+                        "work_descriptions": [],
+                        "raw_work_items": [],
+                        "plans": [],
+                        "risks": [],
+                        "conditions": [],
+                    }
+                progress = update.get("work_progress", "")
+                if progress and progress.strip():
+                    weeks[key]["work_descriptions"].append(progress.strip())
+                    weeks[key]["raw_work_items"].append({
+                        "text": progress.strip(),
+                        "user": users.get(update.get("user_id"), ""),
+                        "date": update.get("update_date", "")
+                    })
+                focus = update.get("main_focus", "")
+                if focus and focus.strip():
+                    weeks[key]["work_descriptions"].append(focus.strip())
+                    weeks[key]["raw_work_items"].append({
+                        "text": focus.strip(),
+                        "user": users.get(update.get("user_id"), ""),
+                        "date": update.get("update_date", "")
+                    })
+
+                # Risks
+                if update.get("issues"):
+                    weeks[key]["risks"].append(f"Issue: {update['issues']}")
+                if update.get("delays"):
+                    weeks[key]["risks"].append(f"Delay: {update['delays']}")
+                for b in (update.get("identified_blockers") or []):
+                    if isinstance(b, dict):
+                        weeks[key]["risks"].append(f"{b.get('blocker_type', 'Blocker')}: {b.get('description', '')}")
+                for c in (update.get("flagged_concerns") or []):
+                    if isinstance(c, dict):
+                        weeks[key]["risks"].append(f"{c.get('severity', 'Concern')}: {c.get('description', '')}")
+
+                # Conditions
+                cond = update.get("site_conditions", "")
+                if cond and cond.strip():
+                    weeks[key]["conditions"].append(cond.strip())
+                if update.get("is_wet_weather_closure"):
+                    weeks[key]["conditions"].append("Wet weather closure")
+
+                # Plans
+                fa = update.get("follow_up_actions", "")
+                if fa and fa.strip():
+                    weeks[key]["plans"].append(fa.strip())
+
+            # Group site notes by week
+            for note in site_notes:
+                note_ts = note.get("created_at", "")
+                if not note_ts:
+                    continue
+                note_date_str = note_ts[:10]
+                ws = get_week_start(note_date_str)
+                we = ws + timedelta(days=6)
+                key = ws.isoformat()
+                if key not in weeks:
+                    weeks[key] = {
+                        "week_start": ws.isoformat(),
+                        "week_end": we.isoformat(),
+                        "hours": 0,
+                        "workers": set(),
+                        "work_descriptions": [],
+                        "raw_work_items": [],
+                        "plans": [],
+                        "risks": [],
+                        "conditions": [],
+                    }
+                note_text = note.get("note_text", "")
+                if note_text and note_text.strip():
+                    author = note.get("admin_users", {}).get("username", "Admin")
+                    weeks[key]["work_descriptions"].append(f"[Site Note] {note_text.strip()}")
+                    weeks[key]["raw_work_items"].append({
+                        "text": f"[Site Note] {note_text.strip()}",
+                        "user": author,
+                        "date": note_date_str
+                    })
+
+            # Fetch weather for the full period
+            from app.admin.weather import get_weather_for_site
+            weather = {}
+            site_address = site_info.get("address", "")
+            if site_address and start_date and end_date:
+                tenant_tz_resp = await client.get(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/tenants",
+                    headers=headers,
+                    params={"id": f"eq.{tenant_id}", "select": "timezone"}
+                )
+                tenant_tz = ""
+                if tenant_tz_resp.status_code == 200 and tenant_tz_resp.json():
+                    tenant_tz = tenant_tz_resp.json()[0].get("timezone", "")
+                weather = await get_weather_for_site(
+                    site_id, site_address, start_date, end_date,
+                    tenant_timezone=tenant_tz,
+                )
+
+            weather_location = ""
+            if isinstance(weather.get("_meta"), dict):
+                weather_location = weather["_meta"].get("location", "")
+
+            # AI-summarise work items per week (uses shared cache with Site Weekly Report)
+            from app.admin.work_summary import summarise_work_items
+
+            # Convert to list sorted by week, attach daily weather and AI summary
+            weeks_list = []
+            for key in sorted(weeks.keys()):
+                w = weeks[key]
+
+                # Build daily weather for this week (Mon-Sun)
+                week_weather = []
+                ws = date_type.fromisoformat(w["week_start"])
+                for i in range(7):
+                    d = ws + timedelta(days=i)
+                    ds = d.isoformat()
+                    dw = weather.get(ds)
+                    if isinstance(dw, dict) and dw.get("temperature_max") is not None:
+                        week_weather.append({
+                            "date": ds,
+                            "day_label": d.strftime("%a"),
+                            "temp_max": round(dw.get("temperature_max", 0)),
+                            "temp_min": round(dw.get("temperature_min", 0)),
+                            "description": dw.get("weather_description", ""),
+                            "icon": dw.get("weather_icon", "cloud"),
+                            "rain_mm": round(dw.get("precipitation_mm", 0) or 0, 1),
+                        })
+
+                # AI-clean the work summary (cached per site+week — shared with Site Weekly Report)
+                raw_items = w.get("raw_work_items", [])
+                work_categories = []
+                if raw_items:
+                    work_categories = await summarise_work_items(
+                        raw_items, users,
+                        tenant_id=tenant_id, site_id=site_id,
+                        week_start=w["week_start"], week_end=w["week_end"],
+                    )
+
+                # Build a flat text summary from the AI categories for display
+                ai_summary = ""
+                if work_categories:
+                    parts = []
+                    for cat in work_categories:
+                        items = cat.get("items", [])
+                        for item in items:
+                            parts.append(item.get("text", ""))
+                    ai_summary = "; ".join(parts[:6]) if parts else ""
+
+                weeks_list.append({
+                    "week_start": w["week_start"],
+                    "week_end": w["week_end"],
+                    "total_hours": round(w["hours"], 1),
+                    "worker_count": len(w["workers"]),
+                    "work_summary": ai_summary or ("; ".join(w["work_descriptions"][:5]) if w["work_descriptions"] else "No updates recorded"),
+                    "work_categories": work_categories,
+                    "risks": w["risks"],
+                    "conditions": "; ".join(w["conditions"]) if w["conditions"] else "",
+                    "plans": "; ".join(w["plans"][:3]) if w["plans"] else "",
+                    "weather": week_weather,
+                })
+
+            total_hours = sum(w["total_hours"] for w in weeks_list)
+
+            return {
+                "success": True,
+                "site": site_info,
+                "weeks": weeks_list,
+                "weather_location": weather_location,
+                "summary": {
+                    "total_hours": round(total_hours, 1),
+                    "total_weeks": len(weeks_list),
+                    "total_risks": sum(len(w["risks"]) for w in weeks_list),
+                }
+            }
+
+    except Exception as e:
+        logger.error(f"Error fetching site progress data: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/admin/reports/site-progress/pdf")
+async def download_site_progress_pdf(
+    request: Request,
+    site_id: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    flavour: str = "client",
+    tenant_id: Optional[str] = None,
+):
+    """Generate and download site progress PDF"""
+    from fastapi.responses import Response
+    from app.admin.pdf_generator import generate_site_progress_pdf
+    from datetime import date as date_type
+
+    user_session = await get_session_user(request)
+    session_tenant_id = user_session.get("tenant_id")
+    is_super_admin = user_session.get("role") == "super_admin"
+
+    if not is_super_admin:
+        tenant_id = session_tenant_id
+
+    if not tenant_id or not site_id or not start_date or not end_date:
+        raise HTTPException(status_code=400, detail="tenant_id, site_id, start_date and end_date required")
+
+    if flavour not in ("client", "internal"):
+        flavour = "client"
+
+    try:
+        # Reuse the data endpoint logic
+        # Simulate request to get_site_progress_data
+        data_result = await get_site_progress_data(
+            request=request,
+            site_id=site_id,
+            start_date=start_date,
+            end_date=end_date,
+            tenant_id=tenant_id,
+        )
+
+        if not data_result.get("success"):
+            raise HTTPException(status_code=500, detail=data_result.get("error", "Failed to fetch data"))
+
+        async with httpx.AsyncClient() as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+            tenant_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenants",
+                headers=headers,
+                params={"id": f"eq.{tenant_id}", "select": "name"}
+            )
+            tenant_name = "Unknown Company"
+            if tenant_resp.status_code == 200 and tenant_resp.json():
+                tenant_name = tenant_resp.json()[0]["name"]
+
+        site_info = data_result["site"]
+        weeks_data = []
+        for w in data_result["weeks"]:
+            weeks_data.append({
+                "week_start": date_type.fromisoformat(w["week_start"]),
+                "week_end": date_type.fromisoformat(w["week_end"]),
+                "total_hours": w["total_hours"],
+                "worker_count": w["worker_count"],
+                "work_summary": w["work_summary"],
+                "risks": w.get("risks", []),
+                "conditions": w.get("conditions", ""),
+                "plans": w.get("plans", ""),
+            })
+
+        pdf_bytes = generate_site_progress_pdf(
+            tenant_name=tenant_name,
+            site_name=site_info.get("name", "Unknown Site"),
+            site_address=site_info.get("address", ""),
+            period_start=date_type.fromisoformat(start_date),
+            period_end=date_type.fromisoformat(end_date),
+            weeks_data=weeks_data,
+            flavour=flavour,
+        )
+
+        site_name_clean = site_info.get("name", "site").replace(" ", "_")
+        filename = f"progress_{site_name_clean}_{flavour}_{start_date}_to_{end_date}.pdf"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating site progress PDF: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# SITE NOTES
+# ============================================
+
+@router.post("/admin/site-notes")
+async def create_site_note(
+    request: Request,
+    site_id: str = Form(...),
+    tenant_id: str = Form(...),
+    note_text: str = Form(...),
+    attachments: list = None,
+):
+    """Create a site note with optional file attachments"""
+    import uuid as uuid_mod
+
+    user_session = await get_session_user(request)
+    admin_user_id = user_session.get("user_id")
+    is_super_admin = user_session.get("role") == "super_admin"
+
+    # Tenant admins can only create notes for their own tenant
+    if not is_super_admin:
+        tenant_id = user_session.get("tenant_id")
+
+    if not tenant_id or not site_id or not note_text.strip():
+        return {"success": False, "error": "Tenant, site, and note text are required"}
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+            }
+
+            # Handle file uploads to Supabase Storage
+            attachment_list = []
+            form = await request.form()
+            files = form.getlist("files")
+
+            for f in files:
+                if hasattr(f, 'filename') and f.filename:
+                    file_bytes = await f.read()
+                    if not file_bytes:
+                        continue
+
+                    # Generate unique path
+                    ext = f.filename.rsplit(".", 1)[-1] if "." in f.filename else "bin"
+                    storage_path = f"{tenant_id}/{site_id}/{uuid_mod.uuid4().hex[:12]}.{ext}"
+
+                    # Upload to Supabase Storage
+                    upload_resp = await client.post(
+                        f"{os.getenv('SUPABASE_URL')}/storage/v1/object/site-note-attachments/{storage_path}",
+                        headers={
+                            "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                            "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                            "Content-Type": f.content_type or "application/octet-stream",
+                        },
+                        content=file_bytes,
+                    )
+
+                    if upload_resp.status_code in [200, 201]:
+                        public_url = f"{os.getenv('SUPABASE_URL')}/storage/v1/object/public/site-note-attachments/{storage_path}"
+                        attachment_list.append({
+                            "filename": f.filename,
+                            "url": public_url,
+                            "content_type": f.content_type or "",
+                            "size": len(file_bytes),
+                        })
+                        logger.info(f"Uploaded attachment: {f.filename} -> {storage_path}")
+                    else:
+                        logger.error(f"Failed to upload {f.filename}: {upload_resp.status_code} {upload_resp.text}")
+
+            # Create the note
+            note_data = {
+                "id": str(uuid_mod.uuid4()),
+                "tenant_id": tenant_id,
+                "site_id": site_id,
+                "admin_user_id": admin_user_id,
+                "note_text": note_text.strip(),
+                "attachments": json.dumps(attachment_list),
+            }
+
+            resp = await client.post(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/site_notes",
+                headers={
+                    **headers,
+                    "Content-Type": "application/json",
+                    "Prefer": "return=representation",
+                },
+                json=note_data,
+            )
+
+            if resp.status_code not in [200, 201]:
+                logger.error(f"Failed to create site note: {resp.status_code} {resp.text}")
+                return {"success": False, "error": "Failed to create note"}
+
+            note = resp.json()[0] if resp.json() else note_data
+
+            # Invalidate work summary cache for the affected week
+            note_date = datetime.now(timezone.utc).date()
+            week_start = note_date - timedelta(days=note_date.weekday())  # Monday
+            week_end = week_start + timedelta(days=6)
+
+            await client.delete(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/work_summary_cache",
+                headers=headers,
+                params={
+                    "tenant_id": f"eq.{tenant_id}",
+                    "site_id": f"eq.{site_id}",
+                    "week_start": f"eq.{week_start.isoformat()}",
+                    "week_end": f"eq.{week_end.isoformat()}",
+                }
+            )
+            logger.info(f"Invalidated work summary cache for site={site_id} week={week_start}")
+
+            return {"success": True, "note": note}
+
+    except Exception as e:
+        logger.error(f"Error creating site note: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/admin/site-notes/data")
+async def get_site_notes(
+    request: Request,
+    site_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    limit: int = 50,
+):
+    """Get site notes with optional filters"""
+    user_session = await get_session_user(request)
+    session_tenant_id = user_session.get("tenant_id")
+    is_super_admin = user_session.get("role") == "super_admin"
+
+    if not is_super_admin:
+        tenant_id = session_tenant_id
+
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            params = {
+                "select": "id,tenant_id,site_id,admin_user_id,note_text,attachments,created_at,admin_users(username,email)",
+                "order": "created_at.desc",
+                "limit": str(limit),
+            }
+
+            if tenant_id:
+                params["tenant_id"] = f"eq.{tenant_id}"
+            if site_id:
+                params["site_id"] = f"eq.{site_id}"
+
+            if start_date and end_date:
+                params["and"] = f"(created_at.gte.{start_date}T00:00:00,created_at.lte.{end_date}T23:59:59)"
+            elif start_date:
+                params["created_at"] = f"gte.{start_date}T00:00:00"
+            elif end_date:
+                params["created_at"] = f"lte.{end_date}T23:59:59"
+
+            resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/site_notes",
+                headers=headers,
+                params=params,
+            )
+
+            if resp.status_code != 200:
+                return {"success": False, "error": "Failed to fetch notes"}
+
+            notes = resp.json()
+
+            # Enrich with site names
+            if notes:
+                site_ids = list(set(n["site_id"] for n in notes))
+                sites_resp = await client.get(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/entities",
+                    headers=headers,
+                    params={
+                        "id": f"in.({','.join(site_ids)})",
+                        "select": "id,name"
+                    }
+                )
+                site_map = {}
+                if sites_resp.status_code == 200:
+                    site_map = {s["id"]: s["name"] for s in sites_resp.json()}
+
+                for note in notes:
+                    note["site_name"] = site_map.get(note["site_id"], "Unknown Site")
+                    # Parse attachments if stored as string
+                    if isinstance(note.get("attachments"), str):
+                        try:
+                            note["attachments"] = json.loads(note["attachments"])
+                        except json.JSONDecodeError:
+                            note["attachments"] = []
+
+            return {"success": True, "notes": notes}
+
+    except Exception as e:
+        logger.error(f"Error fetching site notes: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/admin/site-notes", response_class=HTMLResponse)
+async def site_notes_page(request: Request):
+    """Site notes timeline page"""
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
+    return templates.TemplateResponse(
+        "reports/site_notes.html",
+        {"request": request, "page_title": "Site Notes"}
+    )

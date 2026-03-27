@@ -1,0 +1,597 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Site Weekly Report{% endblock %}
+
+{% block content %}
+<div x-data="siteWeeklyReport()" x-init="init()">
+    <!-- Toast -->
+    <div x-show="toast.show" x-transition class="toast toast-top toast-end z-50" x-cloak>
+        <div class="alert" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'">
+            <span x-text="toast.message"></span>
+        </div>
+    </div>
+
+    <!-- Page Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold">Site Weekly Report</h1>
+            <p class="text-base-content/70 mt-1">Site hours, work completed, risks and plans</p>
+        </div>
+        <button
+            class="btn btn-primary btn-sm gap-2"
+            @click="downloadPDF()"
+            :disabled="!data || !selectedSiteId"
+        >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Download PDF
+        </button>
+    </div>
+
+    <!-- Tenant Switcher (Super Admin Only) -->
+    <template x-if="currentUser?.role === 'super_admin'">
+        <div class="mb-4">
+            <select class="select select-bordered w-full max-w-xs" x-model="selectedTenantId" @change="onTenantChange()">
+                <option value="">Select Tenant</option>
+                <template x-for="tenant in availableTenants" :key="tenant.id">
+                    <option :value="tenant.id" x-text="tenant.name"></option>
+                </template>
+            </select>
+        </div>
+    </template>
+
+    <!-- Filters -->
+    <div class="card bg-base-100 shadow mb-4">
+        <div class="card-body py-3">
+            <div class="flex flex-wrap gap-3 items-center">
+                <!-- Site Selector -->
+                <div class="form-control">
+                    <label class="label label-text text-xs">Site</label>
+                    <select class="select select-bordered select-sm w-64" x-model="selectedSiteId" @change="loadData()">
+                        <option value="">Select a site...</option>
+                        <template x-for="site in availableSites" :key="site.id">
+                            <option :value="site.id" x-text="site.name"></option>
+                        </template>
+                    </select>
+                </div>
+
+                <div class="divider divider-horizontal h-8 self-end"></div>
+
+                <!-- Week Navigation -->
+                <div class="flex items-center gap-2 self-end">
+                    <button class="btn btn-sm btn-ghost" @click="prevWeek()">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
+                    </button>
+                    <span class="font-semibold min-w-[180px] text-center" x-text="weekLabel"></span>
+                    <button class="btn btn-sm btn-ghost" @click="nextWeek()">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
+                    </button>
+                    <button class="btn btn-sm btn-outline" @click="goToThisWeek()">This Week</button>
+                    <button class="btn btn-sm btn-outline" @click="goToLastWeek()">Last Week</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading -->
+    <div x-show="loading" class="flex justify-center py-12">
+        <span class="loading loading-spinner loading-lg"></span>
+    </div>
+
+    <!-- No Site Selected -->
+    <div x-show="!loading && !selectedSiteId" x-cloak class="alert alert-info">
+        Please select a site to view the weekly report.
+    </div>
+
+    <!-- Report Content -->
+    <div x-show="!loading && data && selectedSiteId" x-cloak class="space-y-6">
+
+        <!-- Summary Cards -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div class="stat bg-base-100 shadow rounded-lg p-4">
+                <div class="stat-title text-xs">Total Hours</div>
+                <div class="stat-value text-2xl" x-text="data.summary?.total_hours || 0"></div>
+            </div>
+            <div class="stat bg-base-100 shadow rounded-lg p-4">
+                <div class="stat-title text-xs">Workers</div>
+                <div class="stat-value text-2xl" x-text="data.summary?.total_workers || 0"></div>
+            </div>
+            <div class="stat bg-base-100 shadow rounded-lg p-4">
+                <div class="stat-title text-xs">Site Updates</div>
+                <div class="stat-value text-2xl" x-text="data.summary?.total_updates || 0"></div>
+            </div>
+            <div class="stat bg-base-100 shadow rounded-lg p-4">
+                <div class="stat-title text-xs">Risks Flagged</div>
+                <div class="stat-value text-2xl" :class="data.risks?.length > 0 ? 'text-error' : 'text-success'" x-text="data.risks?.length || 0"></div>
+            </div>
+        </div>
+
+        <!-- Weather Strip -->
+        <template x-if="data.weather && Object.keys(data.weather).length > 1">
+            <div class="card bg-base-100 shadow">
+                <div class="card-body py-3">
+                    <div class="flex justify-between items-baseline mb-2">
+                        <h2 class="card-title text-lg">Weather</h2>
+                        <span class="text-[11px] text-base-content/40" x-show="weatherLocation()" x-text="'Based on ' + weatherLocation()"></span>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="table table-xs w-full">
+                            <thead>
+                                <tr>
+                                    <th class="w-12"></th>
+                                    <template x-for="d in weekDays" :key="d.iso">
+                                        <th class="text-center text-xs" x-text="d.label"></th>
+                                    </template>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Morning row -->
+                                <tr class="bg-amber-50/50">
+                                    <td class="text-[10px] font-semibold text-base-content/50">AM<br/><span class="font-normal">6-11</span></td>
+                                    <template x-for="d in weekDays" :key="d.iso">
+                                        <td class="text-center" :class="getHalfDayBg(d.iso, 'am')">
+                                            <div class="text-base" x-text="getHalfDayEmoji(d.iso, 'am')"></div>
+                                            <div class="text-[10px] text-base-content/50" x-text="getHalfDayDesc(d.iso, 'am')"></div>
+                                            <div class="text-xs font-semibold" x-text="getHalfDayTemp(d.iso, 'am')"></div>
+                                            <template x-if="getHalfDayRain(d.iso, 'am') > 0">
+                                                <div class="text-[10px] text-blue-500 font-medium" x-text="getHalfDayRain(d.iso, 'am') + 'mm'"></div>
+                                            </template>
+                                        </td>
+                                    </template>
+                                </tr>
+                                <!-- Afternoon row -->
+                                <tr class="bg-orange-50/50">
+                                    <td class="text-[10px] font-semibold text-base-content/50">PM<br/><span class="font-normal">11-5</span></td>
+                                    <template x-for="d in weekDays" :key="d.iso">
+                                        <td class="text-center" :class="getHalfDayBg(d.iso, 'pm')">
+                                            <div class="text-base" x-text="getHalfDayEmoji(d.iso, 'pm')"></div>
+                                            <div class="text-[10px] text-base-content/50" x-text="getHalfDayDesc(d.iso, 'pm')"></div>
+                                            <div class="text-xs font-semibold" x-text="getHalfDayTemp(d.iso, 'pm')"></div>
+                                            <template x-if="getHalfDayRain(d.iso, 'pm') > 0">
+                                                <div class="text-[10px] text-blue-500 font-medium" x-text="getHalfDayRain(d.iso, 'pm') + 'mm'"></div>
+                                            </template>
+                                        </td>
+                                    </template>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- Hours Grid -->
+        <div class="card bg-base-100 shadow">
+            <div class="card-body">
+                <h2 class="card-title text-lg">Hours Summary</h2>
+                <template x-if="data.grid?.length > 0">
+                    <div class="overflow-x-auto">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr class="bg-[#1B1464] text-white">
+                                    <th>Name</th>
+                                    <template x-for="d in weekDays" :key="d.iso">
+                                        <th class="text-center" x-text="d.label"></th>
+                                    </template>
+                                    <th class="text-center">Total</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template x-for="person in data.grid" :key="person.user_id">
+                                    <tr>
+                                        <td class="font-semibold">
+                                            <span class="inline-flex items-center justify-center mr-1.5 px-1.5 py-0.5 text-[10px] font-bold bg-primary/10 text-primary rounded" x-text="getInitials(person.name)"></span>
+                                            <span x-text="person.name"></span>
+                                        </td>
+                                        <template x-for="d in weekDays" :key="d.iso">
+                                            <td class="text-center" x-text="person.days[d.iso] ? person.days[d.iso].toFixed(1) : '-'"></td>
+                                        </template>
+                                        <td class="text-center font-bold bg-base-200" x-text="Object.values(person.days).reduce((a,b) => a+b, 0).toFixed(1)"></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                            <tfoot>
+                                <tr class="font-bold bg-base-200 border-t-2 border-[#1B1464]">
+                                    <td>TOTAL</td>
+                                    <template x-for="d in weekDays" :key="d.iso">
+                                        <td class="text-center" x-text="getDayTotal(d.iso)"></td>
+                                    </template>
+                                    <td class="text-center bg-base-300" x-text="data.summary?.total_hours"></td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </template>
+
+                <template x-if="!data.grid || data.grid.length === 0">
+                    <p class="text-base-content/50">No timesheet entries for this week.</p>
+                </template>
+            </div>
+        </div>
+
+        <!-- Work Completed (Categorised) -->
+        <div class="card bg-base-100 shadow">
+            <div class="card-body">
+                <h2 class="card-title text-lg">Work Completed</h2>
+                <template x-if="data.work_categories?.length > 0">
+                    <div class="space-y-4">
+                        <template x-for="(cat, ci) in data.work_categories" :key="ci">
+                            <div>
+                                <h3 class="font-semibold text-sm text-primary uppercase tracking-wide mb-2" x-text="cat.name"></h3>
+                                <ul class="space-y-1.5 pl-1">
+                                    <template x-for="(item, ii) in cat.items" :key="ii">
+                                        <li class="flex gap-2 items-start">
+                                            <span class="text-base-content/30 mt-0.5">&#8226;</span>
+                                            <div class="flex-1">
+                                                <span x-text="item.text"></span>
+                                                <template x-for="(w, wi) in item.workers" :key="wi">
+                                                    <span class="inline-flex items-center justify-center ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-primary/10 text-primary rounded" x-text="w"></span>
+                                                </template>
+                                            </div>
+                                        </li>
+                                    </template>
+                                </ul>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+                <template x-if="!data.work_categories || data.work_categories.length === 0">
+                    <p class="text-base-content/50">No work descriptions recorded this week.</p>
+                </template>
+            </div>
+        </div>
+
+        <!-- Risks & Issues -->
+        <div class="card bg-base-100 shadow" :class="data.risks?.length > 0 ? 'border-l-4 border-error' : ''">
+            <div class="card-body">
+                <h2 class="card-title text-lg">Risks, Issues & Escalations</h2>
+                <template x-if="data.risks?.length > 0">
+                    <ul class="space-y-2">
+                        <template x-for="(risk, i) in data.risks" :key="i">
+                            <li class="flex gap-2 text-error">
+                                <span class="mt-1">&#9888;</span>
+                                <div>
+                                    <span class="font-semibold" x-text="risk.type + ':'"></span>
+                                    <span x-text="risk.text"></span>
+                                </div>
+                            </li>
+                        </template>
+                    </ul>
+                </template>
+                <template x-if="!data.risks || data.risks.length === 0">
+                    <div class="flex gap-2 items-center text-success">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+                        <span>No risks or issues flagged this week.</span>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        <!-- Plans & Follow-ups -->
+        <div class="card bg-base-100 shadow">
+            <div class="card-body">
+                <h2 class="card-title text-lg">Plans & Follow-ups</h2>
+                <template x-if="data.plans?.length > 0">
+                    <ul class="space-y-2">
+                        <template x-for="(plan, i) in data.plans" :key="i">
+                            <li class="flex gap-2">
+                                <span class="text-primary mt-1">&#8226;</span>
+                                <span x-text="plan.text"></span>
+                            </li>
+                        </template>
+                    </ul>
+                </template>
+                <template x-if="!data.plans || data.plans.length === 0">
+                    <p class="text-base-content/50">No follow-up items recorded.</p>
+                </template>
+            </div>
+        </div>
+
+        <!-- Site Conditions -->
+        <template x-if="data.conditions?.length > 0">
+            <div class="card bg-base-100 shadow">
+                <div class="card-body">
+                    <h2 class="card-title text-lg">Site Conditions</h2>
+                    <ul class="space-y-2">
+                        <template x-for="(cond, i) in data.conditions" :key="i">
+                            <li class="flex gap-2">
+                                <span class="mt-1">&#9729;</span>
+                                <span x-text="cond.text"></span>
+                            </li>
+                        </template>
+                    </ul>
+                </div>
+            </div>
+        </template>
+    </div>
+</div>
+
+<script>
+function siteWeeklyReport() {
+    return {
+        currentUser: null,
+        availableTenants: [],
+        availableSites: [],
+        selectedTenantId: '',
+        selectedSiteId: '',
+        loading: false,
+        data: null,
+        toast: { show: false, message: '', type: 'success' },
+
+        weekOffset: 0,
+        weekStart: null,
+        weekEnd: null,
+        weekLabel: '',
+        weekDays: [],
+
+        async init() {
+            try {
+                const resp = await fetch('/admin/auth/me');
+                if (resp.ok) {
+                    const d = await resp.json();
+                    this.currentUser = d.user;
+                    if (this.currentUser?.tenant_id) {
+                        this.selectedTenantId = this.currentUser.tenant_id;
+                    }
+                }
+            } catch (e) {}
+
+            if (this.currentUser?.role === 'super_admin') {
+                await this.loadTenants();
+            }
+
+            this.setWeek(0);
+            if (this.selectedTenantId) {
+                await this.loadSites();
+            }
+        },
+
+        async loadTenants() {
+            try {
+                const resp = await fetch('/admin/tenants/data');
+                if (resp.ok) {
+                    const d = await resp.json();
+                    if (d.success) this.availableTenants = d.tenants || [];
+                }
+            } catch (e) {}
+        },
+
+        async loadSites() {
+            if (!this.selectedTenantId) return;
+            try {
+                let url = '/admin/sites/data';
+                if (this.currentUser?.role === 'super_admin') {
+                    url += `?tenant_id=${this.selectedTenantId}`;
+                }
+                const resp = await fetch(url);
+                if (resp.ok) {
+                    const d = await resp.json();
+                    if (d.success) this.availableSites = d.sites || [];
+                }
+            } catch (e) {}
+        },
+
+        setWeek(offset) {
+            this.weekOffset = offset;
+            const today = new Date();
+            const dayOfWeek = today.getDay();
+            const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+
+            const monday = new Date(today);
+            monday.setDate(today.getDate() + mondayOffset + (offset * 7));
+
+            const sunday = new Date(monday);
+            sunday.setDate(monday.getDate() + 6);
+
+            this.weekStart = this.toISO(monday);
+            this.weekEnd = this.toISO(sunday);
+
+            const opts = { day: 'numeric', month: 'short' };
+            this.weekLabel = `${monday.toLocaleDateString('en-AU', opts)} - ${sunday.toLocaleDateString('en-AU', { ...opts, year: 'numeric' })}`;
+
+            this.weekDays = [];
+            for (let i = 0; i < 7; i++) {
+                const d = new Date(monday);
+                d.setDate(monday.getDate() + i);
+                this.weekDays.push({
+                    iso: this.toISO(d),
+                    label: d.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric' })
+                });
+            }
+
+            if (this.selectedSiteId) this.loadData();
+        },
+
+        toISO(d) {
+            return d.getFullYear() + '-' +
+                String(d.getMonth() + 1).padStart(2, '0') + '-' +
+                String(d.getDate()).padStart(2, '0');
+        },
+
+        prevWeek() { this.setWeek(this.weekOffset - 1); },
+        nextWeek() { this.setWeek(this.weekOffset + 1); },
+        goToThisWeek() { this.setWeek(0); },
+        goToLastWeek() { this.setWeek(-1); },
+
+        async onTenantChange() {
+            this.selectedSiteId = '';
+            this.data = null;
+            await this.loadSites();
+        },
+
+        async loadData() {
+            if (!this.selectedTenantId || !this.selectedSiteId) return;
+
+            this.loading = true;
+            try {
+                let url = `/admin/reports/site-weekly/data?site_id=${this.selectedSiteId}&start_date=${this.weekStart}&end_date=${this.weekEnd}`;
+                if (this.currentUser?.role === 'super_admin') {
+                    url += `&tenant_id=${this.selectedTenantId}`;
+                }
+
+                const resp = await fetch(url);
+                const d = await resp.json();
+                if (d.success) {
+                    this.data = d;
+                } else {
+                    this.showToast(d.error || 'Failed to load data', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error loading data', 'error');
+            }
+            this.loading = false;
+        },
+
+        async downloadPDF() {
+            let url = `/admin/reports/site-weekly/pdf?site_id=${this.selectedSiteId}&start_date=${this.weekStart}&end_date=${this.weekEnd}`;
+            if (this.currentUser?.role === 'super_admin') {
+                url += `&tenant_id=${this.selectedTenantId}`;
+            }
+
+            try {
+                const resp = await fetch(url);
+                if (resp.ok) {
+                    const blob = await resp.blob();
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `site_report_${this.weekStart}_to_${this.weekEnd}.pdf`;
+                    a.click();
+                    URL.revokeObjectURL(a.href);
+                    this.showToast('PDF downloaded', 'success');
+                } else {
+                    this.showToast('Failed to generate PDF', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error downloading PDF', 'error');
+            }
+        },
+
+        // Weather helpers - half day (AM/PM)
+        isHalfDayComplete(iso, half) {
+            // AM (6-11) is complete after 11am, PM (11-5) is complete after 5pm
+            const today = new Date();
+            const todayIso = today.getFullYear() + '-' +
+                String(today.getMonth() + 1).padStart(2, '0') + '-' +
+                String(today.getDate()).padStart(2, '0');
+
+            if (iso < todayIso) return true;  // Past days are always complete
+            if (iso > todayIso) return false;  // Future days never complete
+
+            // Today — check current hour
+            const hour = today.getHours();
+            if (half === 'am') return hour >= 11;
+            if (half === 'pm') return hour >= 17;
+            return false;
+        },
+
+        getHalfDayEmoji(iso, half) {
+            if (!this.isHalfDayComplete(iso, half)) return '';
+            const w = this.data?.weather?.[iso];
+            if (!w) return '';
+            const icon = w[half + '_weather_icon'];
+            if (!icon) return this.getWeatherEmoji(iso);
+            const iconMap = {
+                'sun': '\u2600\uFE0F', 'cloud-sun': '\u26C5', 'cloud': '\u2601\uFE0F',
+                'fog': '\uD83C\uDF2B\uFE0F', 'cloud-drizzle': '\uD83C\uDF26\uFE0F',
+                'cloud-rain': '\uD83C\uDF27\uFE0F', 'cloud-snow': '\u2744\uFE0F',
+                'cloud-lightning': '\u26C8\uFE0F',
+            };
+            return iconMap[icon] || '\u2601\uFE0F';
+        },
+
+        getHalfDayDesc(iso, half) {
+            if (!this.isHalfDayComplete(iso, half)) return '';
+            const w = this.data?.weather?.[iso];
+            return w?.[half + '_weather_description'] || '';
+        },
+
+        getHalfDayTemp(iso, half) {
+            if (!this.isHalfDayComplete(iso, half)) return '';
+            const w = this.data?.weather?.[iso];
+            const temp = w?.[half + '_temp'];
+            if (temp == null) return '';
+            return Math.round(temp) + '\u00B0';
+        },
+
+        getHalfDayRain(iso, half) {
+            if (!this.isHalfDayComplete(iso, half)) return 0;
+            const w = this.data?.weather?.[iso];
+            return w?.[half + '_precipitation_mm'] || 0;
+        },
+
+        getHalfDayBg(iso, half) {
+            if (!this.isHalfDayComplete(iso, half)) return '';
+            const rain = this.getHalfDayRain(iso, half);
+            if (rain >= 5) return 'bg-blue-100';
+            if (rain > 0) return 'bg-blue-50';
+            return '';
+        },
+
+        weatherLocation() {
+            try {
+                return this.data?.weather?.['_meta']?.location || '';
+            } catch (e) { return ''; }
+        },
+
+        getWeatherEmoji(iso) {
+            const w = this.data?.weather?.[iso];
+            if (!w) return '';
+            const iconMap = {
+                'sun': '\u2600\uFE0F',
+                'cloud-sun': '\u26C5',
+                'cloud': '\u2601\uFE0F',
+                'fog': '\uD83C\uDF2B\uFE0F',
+                'cloud-drizzle': '\uD83C\uDF26\uFE0F',
+                'cloud-rain': '\uD83C\uDF27\uFE0F',
+                'cloud-snow': '\u2744\uFE0F',
+                'cloud-lightning': '\u26C8\uFE0F',
+            };
+            return iconMap[w.weather_icon] || '\u2601\uFE0F';
+        },
+
+        getWeatherTemp(iso) {
+            const w = this.data?.weather?.[iso];
+            if (!w || w.temperature_max == null) return '';
+            return `${Math.round(w.temperature_max)}\u00B0 / ${Math.round(w.temperature_min)}\u00B0`;
+        },
+
+        getWeatherDesc(iso) {
+            return this.data?.weather?.[iso]?.weather_description || '';
+        },
+
+        getWeatherRain(iso) {
+            return this.data?.weather?.[iso]?.precipitation_mm || 0;
+        },
+
+        getWeatherBg(iso) {
+            const rain = this.getWeatherRain(iso);
+            if (rain >= 10) return 'bg-blue-100';
+            if (rain > 0) return 'bg-blue-50';
+            return 'bg-base-200/50';
+        },
+
+        getDayTotal(iso) {
+            if (!this.data?.grid) return '-';
+            let total = 0;
+            for (const person of this.data.grid) {
+                total += person.days[iso] || 0;
+            }
+            return total > 0 ? total.toFixed(1) : '-';
+        },
+
+        getInitials(name) {
+            const parts = (name || '').trim().split(/\s+/);
+            if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+            if (parts.length === 1 && parts[0]) return parts[0][0].toUpperCase();
+            return '?';
+        },
+
+        showToast(message, type = 'success') {
+            this.toast = { show: true, message, type };
+            setTimeout(() => this.toast.show = false, 3000);
+        }
+    };
+}
+</script>
+{% endblock %}

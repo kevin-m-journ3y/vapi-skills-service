@@ -29,7 +29,7 @@
 </head>
 <body class="bg-base-200">
     <!-- Navigation -->
-    <div class="navbar bg-base-100 shadow-lg" x-data="{
+    <div class="navbar bg-base-100 shadow-lg sticky top-0 z-50" x-data="{
         currentUser: null,
         isAuthenticated: false,
         async checkAuth() {
@@ -68,6 +68,14 @@
                     Login
                 </a>
             </div>
+
+            <!-- Site Note Button (When Authenticated) -->
+            <button x-show="isAuthenticated" x-cloak
+                    class="btn btn-sm btn-outline btn-primary gap-1"
+                    @click="$dispatch('open-site-note')">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                Site Note
+            </button>
 
             <!-- User Menu Dropdown (When Authenticated) -->
             <div class="dropdown dropdown-end" x-show="isAuthenticated" x-cloak>
@@ -114,6 +122,7 @@
         <aside class="w-64 min-h-screen bg-base-100 shadow-lg" x-data="{
             isAuthenticated: false,
             userRole: null,
+            enabledReports: [],
             async checkAuth() {
                 try {
                     const response = await fetch('/admin/auth/me');
@@ -121,12 +130,22 @@
                         const data = await response.json();
                         this.isAuthenticated = true;
                         this.userRole = data.user?.role;
+                        await this.loadEnabledReports();
                     } else {
                         this.isAuthenticated = false;
                     }
                 } catch (err) {
                     this.isAuthenticated = false;
                 }
+            },
+            async loadEnabledReports() {
+                try {
+                    const resp = await fetch('/admin/reports/enabled');
+                    if (resp.ok) {
+                        const d = await resp.json();
+                        if (d.success) this.enabledReports = d.reports || [];
+                    }
+                } catch (e) {}
             }
         }" x-init="checkAuth()">
             <ul class="menu p-4 gap-2" x-show="isAuthenticated" x-cloak>
@@ -161,9 +180,13 @@
                             Reports
                         </summary>
                         <ul>
-                            <li><a href="/admin/qr-signons" class="{% if 'qr-signons' in request.url.path %}active{% endif %}">QR Sign-Ons</a></li>
-                            <li><a href="/admin/reports/timesheets" class="{% if 'timesheets' in request.url.path %}active{% endif %}">Timesheets</a></li>
-                            <li><a href="/admin/reports/voice-notes" class="{% if 'voice-notes' in request.url.path %}active{% endif %}">Voice Notes</a></li>
+                            <li x-show="enabledReports.includes('qr_signons')" x-cloak><a href="/admin/qr-signons" class="{% if 'qr-signons' in request.url.path %}active{% endif %}">QR Sign-Ons</a></li>
+                            <li x-show="enabledReports.includes('timesheets')" x-cloak><a href="/admin/reports/timesheets" class="{% if request.url.path == '/admin/reports/timesheets' %}active{% endif %}">Timesheets</a></li>
+                            <li x-show="enabledReports.includes('payroll_weekly')" x-cloak><a href="/admin/reports/payroll" class="{% if 'payroll' in request.url.path %}active{% endif %}">Payroll</a></li>
+                            <li x-show="enabledReports.includes('site_weekly')" x-cloak><a href="/admin/reports/site-weekly" class="{% if 'site-weekly' in request.url.path %}active{% endif %}">Site Weekly</a></li>
+                            <li x-show="enabledReports.includes('site_progress')" x-cloak><a href="/admin/reports/site-progress" class="{% if 'site-progress' in request.url.path %}active{% endif %}">Site Progress</a></li>
+                            <li x-show="enabledReports.includes('voice_notes')" x-cloak><a href="/admin/reports/voice-notes" class="{% if 'voice-notes' in request.url.path %}active{% endif %}">Voice Notes</a></li>
+                            <li><a href="/admin/site-notes" class="{% if 'site-notes' in request.url.path %}active{% endif %}">Site Notes</a></li>
                         </ul>
                     </details>
                 </li>
@@ -214,6 +237,204 @@
                 window.location.href = '/admin/login';
             }
         });
+    </script>
+
+    <!-- Site Note Modal (Global) -->
+    <div x-data="siteNoteModal()" @open-site-note.window="openModal()">
+        <div class="modal" :class="open ? 'modal-open' : ''">
+            <div class="modal-box max-w-lg">
+                <h3 class="font-bold text-lg mb-4">Add Site Note</h3>
+
+                <!-- Tenant selector (super admin) -->
+                <template x-if="isSuperAdmin">
+                    <div class="form-control mb-3">
+                        <label class="label"><span class="label-text">Company</span></label>
+                        <select class="select select-bordered select-sm" x-model="tenantId" @change="loadSites()">
+                            <option value="">Select company...</option>
+                            <template x-for="t in tenants" :key="t.id">
+                                <option :value="t.id" x-text="t.name"></option>
+                            </template>
+                        </select>
+                    </div>
+                </template>
+
+                <!-- Site selector -->
+                <div class="form-control mb-3">
+                    <label class="label"><span class="label-text">Site</span></label>
+                    <select class="select select-bordered select-sm" x-model="siteId" :disabled="!tenantId">
+                        <option value="">Select site...</option>
+                        <template x-for="s in sites" :key="s.id">
+                            <option :value="s.id" x-text="s.name"></option>
+                        </template>
+                    </select>
+                </div>
+
+                <!-- Note text -->
+                <div class="form-control mb-3">
+                    <label class="label"><span class="label-text">Note</span></label>
+                    <textarea class="textarea textarea-bordered h-28" placeholder="Describe the observation, concern, issue, or update..."
+                              x-model="noteText"></textarea>
+                </div>
+
+                <!-- File attachments -->
+                <div class="form-control mb-4">
+                    <label class="label"><span class="label-text">Attachments (optional)</span></label>
+                    <div class="border-2 border-dashed border-base-300 rounded-lg p-4 text-center cursor-pointer hover:border-primary/50 transition-colors"
+                         @click="$refs.fileInput.click()"
+                         @dragover.prevent="dragOver = true"
+                         @dragleave.prevent="dragOver = false"
+                         @drop.prevent="handleDrop($event)"
+                         :class="dragOver ? 'border-primary bg-primary/5' : ''">
+                        <input type="file" multiple x-ref="fileInput" class="hidden" @change="handleFiles($event)" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" />
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 mx-auto text-base-content/30" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                        <p class="text-sm text-base-content/50 mt-1">Click or drag files here</p>
+                        <p class="text-xs text-base-content/30">Photos, PDFs, documents</p>
+                    </div>
+                    <!-- File list -->
+                    <template x-if="files.length > 0">
+                        <div class="mt-2 space-y-1">
+                            <template x-for="(file, fi) in files" :key="fi">
+                                <div class="flex items-center justify-between text-sm bg-base-200 rounded px-2 py-1">
+                                    <span x-text="file.name" class="truncate"></span>
+                                    <button class="btn btn-ghost btn-xs" @click="files.splice(fi, 1)">&times;</button>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+                </div>
+
+                <div class="modal-action">
+                    <button class="btn btn-ghost" @click="open = false">Cancel</button>
+                    <button class="btn btn-primary" @click="submitNote()" :disabled="submitting || !siteId || !noteText.trim()">
+                        <span x-show="!submitting">Save Note</span>
+                        <span x-show="submitting" class="loading loading-spinner loading-sm"></span>
+                    </button>
+                </div>
+            </div>
+            <div class="modal-backdrop" @click="open = false"></div>
+        </div>
+
+        <!-- Toast -->
+        <div x-show="toast.show" x-transition class="toast toast-top toast-end z-[100]" x-cloak>
+            <div class="alert" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'">
+                <span x-text="toast.message"></span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    function siteNoteModal() {
+        return {
+            open: false,
+            isSuperAdmin: false,
+            tenantId: '',
+            siteId: '',
+            noteText: '',
+            files: [],
+            tenants: [],
+            sites: [],
+            submitting: false,
+            dragOver: false,
+            toast: { show: false, message: '', type: 'success' },
+
+            async openModal() {
+                this.open = true;
+                this.noteText = '';
+                this.files = [];
+                this.siteId = '';
+
+                // Get user info
+                try {
+                    const resp = await fetch('/admin/auth/me');
+                    if (resp.ok) {
+                        const d = await resp.json();
+                        this.isSuperAdmin = d.user?.role === 'super_admin';
+                        if (d.user?.tenant_id) {
+                            this.tenantId = d.user.tenant_id;
+                        }
+                    }
+                } catch (e) {}
+
+                if (this.isSuperAdmin && this.tenants.length === 0) {
+                    await this.loadTenants();
+                }
+                if (this.tenantId) {
+                    await this.loadSites();
+                }
+            },
+
+            async loadTenants() {
+                try {
+                    const resp = await fetch('/admin/tenants/data');
+                    if (resp.ok) {
+                        const d = await resp.json();
+                        if (d.success) this.tenants = d.tenants || [];
+                    }
+                } catch (e) {}
+            },
+
+            async loadSites() {
+                if (!this.tenantId) { this.sites = []; return; }
+                try {
+                    let url = '/admin/sites/data';
+                    if (this.isSuperAdmin) url += `?tenant_id=${this.tenantId}`;
+                    const resp = await fetch(url);
+                    if (resp.ok) {
+                        const d = await resp.json();
+                        if (d.success) this.sites = d.sites || [];
+                    }
+                } catch (e) {}
+            },
+
+            handleFiles(event) {
+                for (const f of event.target.files) {
+                    this.files.push(f);
+                }
+                event.target.value = '';
+            },
+
+            handleDrop(event) {
+                this.dragOver = false;
+                for (const f of event.dataTransfer.files) {
+                    this.files.push(f);
+                }
+            },
+
+            async submitNote() {
+                this.submitting = true;
+                try {
+                    const formData = new FormData();
+                    formData.append('tenant_id', this.tenantId);
+                    formData.append('site_id', this.siteId);
+                    formData.append('note_text', this.noteText);
+                    for (const f of this.files) {
+                        formData.append('files', f);
+                    }
+
+                    const resp = await fetch('/admin/site-notes', {
+                        method: 'POST',
+                        body: formData,
+                    });
+                    const d = await resp.json();
+
+                    if (d.success) {
+                        this.open = false;
+                        this.showToast('Site note saved', 'success');
+                    } else {
+                        this.showToast(d.error || 'Failed to save note', 'error');
+                    }
+                } catch (e) {
+                    this.showToast('Error saving note', 'error');
+                }
+                this.submitting = false;
+            },
+
+            showToast(message, type = 'success') {
+                this.toast = { show: true, message, type };
+                setTimeout(() => this.toast.show = false, 3000);
+            }
+        };
+    }
     </script>
 
     {% block extra_scripts %}{% endblock %}

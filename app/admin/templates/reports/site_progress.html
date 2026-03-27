@@ -1,0 +1,454 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Site Progress Report{% endblock %}
+
+{% block content %}
+<div x-data="siteProgressReport()" x-init="init()">
+    <!-- Toast -->
+    <div x-show="toast.show" x-transition class="toast toast-top toast-end z-50" x-cloak>
+        <div class="alert" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'">
+            <span x-text="toast.message"></span>
+        </div>
+    </div>
+
+    <!-- Page Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold">Site Progress Report</h1>
+            <p class="text-base-content/70 mt-1">Multi-week site progress for clients or internal review</p>
+        </div>
+        <div class="flex gap-2">
+            <div class="dropdown dropdown-end">
+                <label tabindex="0" class="btn btn-primary btn-sm gap-2" :class="{ 'btn-disabled': !data || !selectedSiteId }">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Download PDF
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
+                </label>
+                <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-56">
+                    <li><a @click="downloadPDF('client')">Client Version (progress only)</a></li>
+                    <li><a @click="downloadPDF('internal')">Internal Version (full detail)</a></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tenant Switcher (Super Admin Only) -->
+    <template x-if="currentUser?.role === 'super_admin'">
+        <div class="mb-4">
+            <select class="select select-bordered w-full max-w-xs" x-model="selectedTenantId" @change="onTenantChange()">
+                <option value="">Select Tenant</option>
+                <template x-for="tenant in availableTenants" :key="tenant.id">
+                    <option :value="tenant.id" x-text="tenant.name"></option>
+                </template>
+            </select>
+        </div>
+    </template>
+
+    <!-- Filters -->
+    <div class="card bg-base-100 shadow mb-4">
+        <div class="card-body py-3">
+            <div class="flex flex-wrap gap-3 items-end">
+                <!-- Site Selector -->
+                <div class="form-control">
+                    <label class="label label-text text-xs">Site</label>
+                    <select class="select select-bordered select-sm w-64" x-model="selectedSiteId" @change="loadData()">
+                        <option value="">Select a site...</option>
+                        <template x-for="site in availableSites" :key="site.id">
+                            <option :value="site.id" x-text="site.name"></option>
+                        </template>
+                    </select>
+                </div>
+
+                <div class="divider divider-horizontal h-8"></div>
+
+                <!-- Period Presets -->
+                <div class="form-control">
+                    <label class="label label-text text-xs">Period</label>
+                    <div class="flex gap-2">
+                        <button class="btn btn-sm" :class="periodWeeks === 4 ? 'btn-primary' : 'btn-outline'" @click="setPeriod(4)">4 Weeks</button>
+                        <button class="btn btn-sm" :class="periodWeeks === 8 ? 'btn-primary' : 'btn-outline'" @click="setPeriod(8)">8 Weeks</button>
+                        <button class="btn btn-sm" :class="periodWeeks === 12 ? 'btn-primary' : 'btn-outline'" @click="setPeriod(12)">12 Weeks</button>
+                        <button class="btn btn-sm" :class="periodWeeks === 0 ? 'btn-primary' : 'btn-outline'" @click="setPeriod(0)">All Time</button>
+                    </div>
+                </div>
+
+                <div class="divider divider-horizontal h-8"></div>
+
+                <!-- View Toggle -->
+                <div class="form-control">
+                    <label class="label label-text text-xs">View</label>
+                    <div class="flex gap-2">
+                        <button class="btn btn-sm" :class="viewMode === 'client' ? 'btn-primary' : 'btn-outline'" @click="viewMode = 'client'">Client</button>
+                        <button class="btn btn-sm" :class="viewMode === 'internal' ? 'btn-primary' : 'btn-outline'" @click="viewMode = 'internal'">Internal</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading -->
+    <div x-show="loading" class="flex justify-center py-12">
+        <span class="loading loading-spinner loading-lg"></span>
+    </div>
+
+    <!-- No Site Selected -->
+    <div x-show="!loading && !selectedSiteId" x-cloak class="alert alert-info">
+        Please select a site to view progress data.
+    </div>
+
+    <!-- Report Content -->
+    <div x-show="!loading && data && selectedSiteId" x-cloak class="space-y-6">
+
+        <!-- Site Info -->
+        <div class="card bg-[#1B1464] text-white shadow">
+            <div class="card-body py-4">
+                <h2 class="text-2xl font-bold" x-text="data.site?.name"></h2>
+                <p class="opacity-70" x-text="data.site?.address || ''"></p>
+                <p class="text-sm opacity-50" x-text="periodLabel"></p>
+            </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <div class="stat bg-base-100 shadow rounded-lg p-4">
+                <div class="stat-title text-xs">Total Hours</div>
+                <div class="stat-value text-2xl" x-text="data.summary?.total_hours || 0"></div>
+            </div>
+            <div class="stat bg-base-100 shadow rounded-lg p-4">
+                <div class="stat-title text-xs">Weeks Covered</div>
+                <div class="stat-value text-2xl" x-text="data.summary?.total_weeks || 0"></div>
+            </div>
+            <template x-if="viewMode === 'internal'">
+                <div class="stat bg-base-100 shadow rounded-lg p-4">
+                    <div class="stat-title text-xs">Total Risks/Issues</div>
+                    <div class="stat-value text-2xl" :class="(data.summary?.total_risks || 0) > 0 ? 'text-error' : 'text-success'" x-text="data.summary?.total_risks || 0"></div>
+                </div>
+            </template>
+        </div>
+
+        <!-- Weekly Overview Table -->
+        <div class="card bg-base-100 shadow">
+            <div class="card-body">
+                <h2 class="card-title text-lg">Weekly Overview</h2>
+                <div class="overflow-x-auto">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr class="bg-[#1B1464] text-white">
+                                <th>Week</th>
+                                <th class="text-center">Hours</th>
+                                <th class="text-center">Workers</th>
+                                <template x-if="viewMode === 'internal'">
+                                    <th class="text-center">Issues</th>
+                                </template>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="(week, i) in data.weeks" :key="i">
+                                <tr :class="i % 2 === 0 ? '' : 'bg-base-200/50'">
+                                    <td x-text="formatWeekLabel(week.week_start, week.week_end)"></td>
+                                    <td class="text-center" x-text="week.total_hours"></td>
+                                    <td class="text-center" x-text="week.worker_count"></td>
+                                    <template x-if="viewMode === 'internal'">
+                                        <td class="text-center">
+                                            <span :class="week.risks?.length > 0 ? 'badge badge-error badge-sm' : ''" x-text="week.risks?.length || '-'"></span>
+                                        </td>
+                                    </template>
+                                </tr>
+                            </template>
+                        </tbody>
+                        <tfoot>
+                            <tr class="font-bold bg-base-200 border-t-2 border-[#1B1464]">
+                                <td>TOTAL</td>
+                                <td class="text-center" x-text="data.summary?.total_hours || 0"></td>
+                                <td></td>
+                                <template x-if="viewMode === 'internal'">
+                                    <td class="text-center" x-text="data.summary?.total_risks || 0"></td>
+                                </template>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Week-by-Week Detail -->
+        <h2 class="text-xl font-bold">Week-by-Week Detail</h2>
+
+        <template x-for="(week, i) in data.weeks" :key="i">
+            <div class="card bg-base-100 shadow">
+                <div class="card-body">
+                    <div class="flex justify-between items-start">
+                        <h3 class="card-title text-base" x-text="'Week of ' + formatWeekLabel(week.week_start, week.week_end)"></h3>
+                        <div class="flex gap-3 text-sm text-base-content/60">
+                            <span x-text="week.total_hours + 'h'"></span>
+                            <span x-text="week.worker_count + ' workers'"></span>
+                        </div>
+                    </div>
+
+                    <!-- Weather strip (compact daily) -->
+                    <template x-if="week.weather?.length > 0">
+                        <div class="mt-2 flex gap-1 flex-wrap">
+                            <template x-for="(dw, wi) in week.weather" :key="wi">
+                                <div class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px]"
+                                     :class="dw.rain_mm >= 5 ? 'bg-blue-100 text-blue-700' : dw.rain_mm > 0 ? 'bg-blue-50 text-blue-600' : 'bg-base-200/60 text-base-content/50'">
+                                    <span class="font-semibold" x-text="dw.day_label"></span>
+                                    <span x-text="weatherEmoji(dw.icon)"></span>
+                                    <span x-text="dw.temp_max + '\u00B0'"></span>
+                                    <template x-if="dw.rain_mm > 0">
+                                        <span class="font-medium" x-text="dw.rain_mm + 'mm'"></span>
+                                    </template>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+
+                    <!-- Work Summary: Client view (flat text) -->
+                    <template x-if="viewMode === 'client'">
+                        <div class="mt-2">
+                            <p x-text="week.work_summary" :class="week.work_summary === 'No updates recorded' ? 'text-base-content/40 italic' : ''"></p>
+                        </div>
+                    </template>
+
+                    <!-- Work Summary: Internal view (categorised, matching Site Weekly) -->
+                    <template x-if="viewMode === 'internal'">
+                        <div class="mt-3">
+                            <p class="font-semibold text-sm mb-2">Work Completed</p>
+                            <template x-if="week.work_categories?.length > 0">
+                                <div class="space-y-3">
+                                    <template x-for="(cat, ci) in week.work_categories" :key="ci">
+                                        <div>
+                                            <h4 class="font-semibold text-xs text-primary uppercase tracking-wide mb-1" x-text="cat.name"></h4>
+                                            <ul class="space-y-1 pl-1">
+                                                <template x-for="(item, ii) in cat.items" :key="ii">
+                                                    <li class="flex gap-2 items-start text-sm">
+                                                        <span class="text-base-content/30 mt-0.5">&#8226;</span>
+                                                        <div class="flex-1">
+                                                            <span x-text="item.text"></span>
+                                                            <template x-for="(w, wi) in item.workers" :key="wi">
+                                                                <span class="inline-flex items-center justify-center ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-primary/10 text-primary rounded" x-text="w"></span>
+                                                            </template>
+                                                        </div>
+                                                    </li>
+                                                </template>
+                                            </ul>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                            <template x-if="!week.work_categories || week.work_categories.length === 0">
+                                <p class="text-sm text-base-content/40 italic" x-text="week.work_summary"></p>
+                            </template>
+                        </div>
+                    </template>
+
+                    <!-- Internal: Risks -->
+                    <template x-if="viewMode === 'internal' && week.risks?.length > 0">
+                        <div class="mt-3 p-3 bg-error/5 rounded-lg border border-error/20">
+                            <p class="font-semibold text-error text-sm mb-1">Risks & Issues</p>
+                            <ul class="space-y-1">
+                                <template x-for="(risk, j) in week.risks" :key="j">
+                                    <li class="text-sm text-error flex gap-1">
+                                        <span>&#9888;</span>
+                                        <span x-text="risk"></span>
+                                    </li>
+                                </template>
+                            </ul>
+                        </div>
+                    </template>
+
+                    <!-- Internal: Conditions -->
+                    <template x-if="viewMode === 'internal' && week.conditions">
+                        <div class="mt-2 text-sm text-base-content/60">
+                            <span class="font-semibold">Site Conditions:</span> <span x-text="week.conditions"></span>
+                        </div>
+                    </template>
+
+                    <!-- Internal: Plans -->
+                    <template x-if="viewMode === 'internal' && week.plans">
+                        <div class="mt-2 text-sm text-base-content/60">
+                            <span class="font-semibold">Plans/Follow-ups:</span> <span x-text="week.plans"></span>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </template>
+
+        <!-- No Weeks -->
+        <div x-show="data.weeks?.length === 0" class="alert alert-warning">
+            No data found for the selected period.
+        </div>
+    </div>
+</div>
+
+<script>
+function siteProgressReport() {
+    return {
+        currentUser: null,
+        availableTenants: [],
+        availableSites: [],
+        selectedTenantId: '',
+        selectedSiteId: '',
+        loading: false,
+        data: null,
+        toast: { show: false, message: '', type: 'success' },
+
+        periodWeeks: 4,
+        viewMode: 'client',
+        startDate: '',
+        endDate: '',
+        periodLabel: '',
+
+        async init() {
+            try {
+                const resp = await fetch('/admin/auth/me');
+                if (resp.ok) {
+                    const d = await resp.json();
+                    this.currentUser = d.user;
+                    if (this.currentUser?.tenant_id) {
+                        this.selectedTenantId = this.currentUser.tenant_id;
+                    }
+                }
+            } catch (e) {}
+
+            if (this.currentUser?.role === 'super_admin') {
+                await this.loadTenants();
+            }
+
+            this.setPeriod(4, false);
+            if (this.selectedTenantId) {
+                await this.loadSites();
+            }
+        },
+
+        async loadTenants() {
+            try {
+                const resp = await fetch('/admin/tenants/data');
+                if (resp.ok) {
+                    const d = await resp.json();
+                    if (d.success) this.availableTenants = d.tenants || [];
+                }
+            } catch (e) {}
+        },
+
+        async loadSites() {
+            if (!this.selectedTenantId) return;
+            try {
+                let url = '/admin/sites/data';
+                if (this.currentUser?.role === 'super_admin') {
+                    url += `?tenant_id=${this.selectedTenantId}`;
+                }
+                const resp = await fetch(url);
+                if (resp.ok) {
+                    const d = await resp.json();
+                    if (d.success) this.availableSites = d.sites || [];
+                }
+            } catch (e) {}
+        },
+
+        setPeriod(weeks, shouldLoad = true) {
+            this.periodWeeks = weeks;
+            const today = new Date();
+            this.endDate = this.toISO(today);
+
+            if (weeks === 0) {
+                // All time - go back 2 years
+                const start = new Date(today);
+                start.setFullYear(start.getFullYear() - 2);
+                this.startDate = this.toISO(start);
+                this.periodLabel = 'All Time';
+            } else {
+                const start = new Date(today);
+                start.setDate(start.getDate() - (weeks * 7));
+                this.startDate = this.toISO(start);
+                this.periodLabel = `Last ${weeks} Weeks`;
+            }
+
+            if (shouldLoad && this.selectedSiteId) this.loadData();
+        },
+
+        toISO(d) {
+            return d.getFullYear() + '-' +
+                String(d.getMonth() + 1).padStart(2, '0') + '-' +
+                String(d.getDate()).padStart(2, '0');
+        },
+
+        async onTenantChange() {
+            this.selectedSiteId = '';
+            this.data = null;
+            await this.loadSites();
+        },
+
+        async loadData() {
+            if (!this.selectedTenantId || !this.selectedSiteId) return;
+
+            this.loading = true;
+            try {
+                let url = `/admin/reports/site-progress/data?site_id=${this.selectedSiteId}&start_date=${this.startDate}&end_date=${this.endDate}`;
+                if (this.currentUser?.role === 'super_admin') {
+                    url += `&tenant_id=${this.selectedTenantId}`;
+                }
+
+                const resp = await fetch(url);
+                const d = await resp.json();
+                if (d.success) {
+                    this.data = d;
+                } else {
+                    this.showToast(d.error || 'Failed to load data', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error loading data', 'error');
+            }
+            this.loading = false;
+        },
+
+        weatherEmoji(icon) {
+            const map = {
+                'sun': '\u2600\uFE0F', 'cloud-sun': '\u26C5', 'cloud': '\u2601\uFE0F',
+                'fog': '\uD83C\uDF2B\uFE0F', 'cloud-drizzle': '\uD83C\uDF26\uFE0F',
+                'cloud-rain': '\uD83C\uDF27\uFE0F', 'cloud-snow': '\u2744\uFE0F',
+                'cloud-lightning': '\u26C8\uFE0F',
+            };
+            return map[icon] || '\u2601\uFE0F';
+        },
+
+        formatWeekLabel(start, end) {
+            const s = new Date(start + 'T00:00:00');
+            const e = new Date(end + 'T00:00:00');
+            const opts = { day: 'numeric', month: 'short' };
+            return `${s.toLocaleDateString('en-AU', opts)} - ${e.toLocaleDateString('en-AU', { ...opts, year: 'numeric' })}`;
+        },
+
+        async downloadPDF(flavour) {
+            let url = `/admin/reports/site-progress/pdf?site_id=${this.selectedSiteId}&start_date=${this.startDate}&end_date=${this.endDate}&flavour=${flavour}`;
+            if (this.currentUser?.role === 'super_admin') {
+                url += `&tenant_id=${this.selectedTenantId}`;
+            }
+
+            try {
+                const resp = await fetch(url);
+                if (resp.ok) {
+                    const blob = await resp.blob();
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `progress_${flavour}_${this.startDate}_to_${this.endDate}.pdf`;
+                    a.click();
+                    URL.revokeObjectURL(a.href);
+                    this.showToast('PDF downloaded', 'success');
+                } else {
+                    this.showToast('Failed to generate PDF', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error downloading PDF', 'error');
+            }
+        },
+
+        showToast(message, type = 'success') {
+            this.toast = { show: true, message, type };
+            setTimeout(() => this.toast.show = false, 3000);
+        }
+    };
+}
+</script>
+{% endblock %}

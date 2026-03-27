@@ -1,0 +1,420 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Weekly Payroll Summary{% endblock %}
+
+{% block content %}
+<div x-data="payrollReport()" x-init="init()">
+    <!-- Toast -->
+    <div x-show="toast.show" x-transition class="toast toast-top toast-end z-50" x-cloak>
+        <div class="alert" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'">
+            <span x-text="toast.message"></span>
+        </div>
+    </div>
+
+    <!-- Page Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold">Weekly Payroll Summary</h1>
+            <p class="text-base-content/70 mt-1">Hours worked per person per day for payroll processing</p>
+        </div>
+        <button
+            class="btn btn-primary btn-sm gap-2"
+            @click="showBreakModal = true"
+            :disabled="!data || data.grid?.length === 0"
+        >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Download PDF
+        </button>
+    </div>
+
+    <!-- Tenant Switcher (Super Admin Only) -->
+    <template x-if="currentUser?.role === 'super_admin'">
+        <div class="mb-4">
+            <select class="select select-bordered w-full max-w-xs" x-model="selectedTenantId" @change="onTenantChange()">
+                <option value="">Select Tenant</option>
+                <template x-for="tenant in availableTenants" :key="tenant.id">
+                    <option :value="tenant.id" x-text="tenant.name"></option>
+                </template>
+            </select>
+        </div>
+    </template>
+
+    <!-- Week Selector -->
+    <div class="card bg-base-100 shadow mb-4">
+        <div class="card-body py-3">
+            <div class="flex flex-wrap gap-3 items-center">
+                <button class="btn btn-sm btn-ghost" @click="prevWeek()">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
+                </button>
+                <div class="text-center min-w-[200px]">
+                    <span class="font-semibold" x-text="weekLabel"></span>
+                </div>
+                <button class="btn btn-sm btn-ghost" @click="nextWeek()">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
+                </button>
+                <div class="divider divider-horizontal"></div>
+                <button class="btn btn-sm btn-outline" @click="goToThisWeek()">This Week</button>
+                <button class="btn btn-sm btn-outline" @click="goToLastWeek()">Last Week</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading -->
+    <div x-show="loading" class="flex justify-center py-12">
+        <span class="loading loading-spinner loading-lg"></span>
+    </div>
+
+    <!-- No Tenant Selected -->
+    <div x-show="!loading && !selectedTenantId && currentUser?.role === 'super_admin'" x-cloak class="alert alert-info">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        <span>Please select a tenant to view payroll data</span>
+    </div>
+
+    <!-- No Data -->
+    <div x-show="!loading && data && data.grid?.length === 0" x-cloak class="alert alert-warning">
+        No timesheet entries found for this week.
+    </div>
+
+    <!-- Break Deduction Banner (when active) -->
+    <div x-show="breakMinutes > 0 && data?.grid?.length > 0" x-cloak class="alert alert-info mb-4">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        <span>
+            Break deduction active: <strong x-text="breakMinutes + ' min'"></strong> deducted per day where hours exceed
+            <strong x-text="breakThreshold + 'h'"></strong>
+            <button class="btn btn-xs btn-ghost ml-2" @click="breakMinutes = 0; buildGrid()">Clear</button>
+        </span>
+    </div>
+
+    <!-- Payroll Grid -->
+    <div x-show="!loading && data && data.grid?.length > 0" x-cloak>
+        <!-- Summary Cards -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+            <div class="stat bg-base-100 shadow rounded-lg p-4">
+                <div class="stat-title text-xs">Total Workers</div>
+                <div class="stat-value text-2xl" x-text="data.grid?.length || 0"></div>
+            </div>
+            <div class="stat bg-base-100 shadow rounded-lg p-4">
+                <div class="stat-title text-xs">Total Hours</div>
+                <div class="stat-value text-2xl" x-text="grandTotal.toFixed(1)"></div>
+            </div>
+            <template x-if="breakMinutes > 0">
+                <div class="stat bg-base-100 shadow rounded-lg p-4">
+                    <div class="stat-title text-xs">Payable Hours</div>
+                    <div class="stat-value text-2xl text-success" x-text="grandPayable.toFixed(1)"></div>
+                </div>
+            </template>
+            <div class="stat bg-base-100 shadow rounded-lg p-4">
+                <div class="stat-title text-xs">Avg Hours/Person</div>
+                <div class="stat-value text-2xl" x-text="data.grid?.length > 0 ? (grandTotal / data.grid.length).toFixed(1) : '0'"></div>
+            </div>
+        </div>
+
+        <!-- Hours Table -->
+        <div class="card bg-base-100 shadow overflow-x-auto">
+            <table class="table table-sm">
+                <thead>
+                    <tr class="bg-[#1B1464] text-white">
+                        <th class="font-bold">Name</th>
+                        <template x-for="d in weekDays" :key="d.iso">
+                            <th class="text-center" x-text="d.label"></th>
+                        </template>
+                        <th class="text-center bg-base-300 text-base-content font-bold">Total</th>
+                        <template x-if="breakMinutes > 0">
+                            <th class="text-center bg-success/20 text-success font-bold">Payable</th>
+                        </template>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="(person, idx) in gridRows" :key="person.user_id">
+                        <tr :class="idx % 2 === 0 ? '' : 'bg-base-200/50'">
+                            <td class="font-semibold" x-text="person.name"></td>
+                            <template x-for="d in weekDays" :key="d.iso">
+                                <td class="text-center" x-text="person.days[d.iso] ? person.days[d.iso].toFixed(1) : '-'"></td>
+                            </template>
+                            <td class="text-center font-bold bg-base-200" x-text="person.total.toFixed(1)"></td>
+                            <template x-if="breakMinutes > 0">
+                                <td class="text-center font-bold bg-success/10 text-success" x-text="person.payable.toFixed(1)"></td>
+                            </template>
+                        </tr>
+                    </template>
+                </tbody>
+                <tfoot>
+                    <tr class="font-bold bg-base-200 border-t-2 border-[#1B1464]">
+                        <td>TOTAL</td>
+                        <template x-for="d in weekDays" :key="d.iso">
+                            <td class="text-center" x-text="dayTotals[d.iso]?.toFixed(1) || '-'"></td>
+                        </template>
+                        <td class="text-center bg-base-300" x-text="grandTotal.toFixed(1)"></td>
+                        <template x-if="breakMinutes > 0">
+                            <td class="text-center bg-success/20 text-success" x-text="grandPayable.toFixed(1)"></td>
+                        </template>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>
+
+    <!-- Break Deduction Modal -->
+    <div class="modal" :class="showBreakModal ? 'modal-open' : ''">
+        <div class="modal-box">
+            <h3 class="font-bold text-lg mb-4">Download Payroll PDF</h3>
+
+            <div class="form-control mb-4">
+                <label class="label cursor-pointer justify-start gap-3">
+                    <input type="checkbox" class="toggle toggle-primary" x-model="applyBreak" />
+                    <span class="label-text font-medium">Deduct break time from hours</span>
+                </label>
+            </div>
+
+            <div x-show="applyBreak" x-transition class="space-y-3 mb-4 pl-4 border-l-2 border-primary/30">
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text">Break duration (minutes)</span>
+                    </label>
+                    <input type="number" class="input input-bordered input-sm w-32" x-model.number="modalBreakMinutes" min="0" max="120" step="5" />
+                </div>
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text">Only deduct if worked more than (hours)</span>
+                    </label>
+                    <input type="number" class="input input-bordered input-sm w-32" x-model.number="modalBreakThreshold" min="0" max="12" step="0.5" />
+                </div>
+                <p class="text-sm text-base-content/50">
+                    Example: With 30 min break and 4h threshold, an 8h day becomes 7.5h payable. A 3h day stays at 3h.
+                </p>
+            </div>
+
+            <div class="modal-action">
+                <button class="btn btn-ghost" @click="showBreakModal = false">Cancel</button>
+                <button class="btn btn-primary" @click="downloadPDF()">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Download PDF
+                </button>
+            </div>
+        </div>
+        <div class="modal-backdrop" @click="showBreakModal = false"></div>
+    </div>
+</div>
+
+<script>
+function payrollReport() {
+    return {
+        currentUser: null,
+        availableTenants: [],
+        selectedTenantId: '',
+        loading: false,
+        data: null,
+        toast: { show: false, message: '', type: 'success' },
+
+        // Week navigation
+        weekOffset: 0,
+        weekStart: null,
+        weekEnd: null,
+        weekLabel: '',
+        weekDays: [],
+
+        // Grid data
+        gridRows: [],
+        dayTotals: {},
+        grandTotal: 0,
+        grandPayable: 0,
+
+        // Break deduction
+        breakMinutes: 0,
+        breakThreshold: 4.0,
+        showBreakModal: false,
+        applyBreak: true,
+        modalBreakMinutes: 30,
+        modalBreakThreshold: 4.0,
+
+        async init() {
+            try {
+                const resp = await fetch('/admin/auth/me');
+                if (resp.ok) {
+                    const d = await resp.json();
+                    this.currentUser = d.user;
+                    if (this.currentUser?.tenant_id) {
+                        this.selectedTenantId = this.currentUser.tenant_id;
+                    }
+                }
+            } catch (e) {}
+
+            if (this.currentUser?.role === 'super_admin') {
+                await this.loadTenants();
+            }
+
+            this.setWeek(0);
+        },
+
+        async loadTenants() {
+            try {
+                const resp = await fetch('/admin/tenants/data');
+                if (resp.ok) {
+                    const d = await resp.json();
+                    if (d.success) this.availableTenants = d.tenants || [];
+                }
+            } catch (e) {}
+        },
+
+        setWeek(offset) {
+            this.weekOffset = offset;
+            const today = new Date();
+            const dayOfWeek = today.getDay();
+            const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+
+            const monday = new Date(today);
+            monday.setDate(today.getDate() + mondayOffset + (offset * 7));
+
+            const sunday = new Date(monday);
+            sunday.setDate(monday.getDate() + 6);
+
+            this.weekStart = this.toISO(monday);
+            this.weekEnd = this.toISO(sunday);
+
+            const opts = { day: 'numeric', month: 'short' };
+            this.weekLabel = `${monday.toLocaleDateString('en-AU', opts)} - ${sunday.toLocaleDateString('en-AU', { ...opts, year: 'numeric' })}`;
+
+            // Build day columns
+            this.weekDays = [];
+            for (let i = 0; i < 7; i++) {
+                const d = new Date(monday);
+                d.setDate(monday.getDate() + i);
+                this.weekDays.push({
+                    iso: this.toISO(d),
+                    label: d.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric' })
+                });
+            }
+
+            this.loadData();
+        },
+
+        toISO(d) {
+            return d.getFullYear() + '-' +
+                String(d.getMonth() + 1).padStart(2, '0') + '-' +
+                String(d.getDate()).padStart(2, '0');
+        },
+
+        prevWeek() { this.setWeek(this.weekOffset - 1); },
+        nextWeek() { this.setWeek(this.weekOffset + 1); },
+        goToThisWeek() { this.setWeek(0); },
+        goToLastWeek() { this.setWeek(-1); },
+
+        onTenantChange() {
+            this.loadData();
+        },
+
+        async loadData() {
+            if (!this.selectedTenantId) {
+                this.data = null;
+                return;
+            }
+
+            this.loading = true;
+            try {
+                let url = `/admin/reports/payroll/data?start_date=${this.weekStart}&end_date=${this.weekEnd}`;
+                if (this.currentUser?.role === 'super_admin') {
+                    url += `&tenant_id=${this.selectedTenantId}`;
+                }
+
+                const resp = await fetch(url);
+                const d = await resp.json();
+                if (d.success) {
+                    this.data = d;
+                    this.buildGrid();
+                } else {
+                    this.showToast(d.error || 'Failed to load data', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error loading data', 'error');
+            }
+            this.loading = false;
+        },
+
+        buildGrid() {
+            if (!this.data?.grid) return;
+
+            const breakHrs = this.breakMinutes / 60;
+
+            this.gridRows = this.data.grid.map(person => {
+                let total = 0;
+                let payable = 0;
+                const days = {};
+
+                for (const [dateStr, hours] of Object.entries(person.days)) {
+                    days[dateStr] = hours;
+                    total += hours;
+                    let ph = hours;
+                    if (this.breakMinutes > 0 && hours > this.breakThreshold) {
+                        ph = Math.max(0, hours - breakHrs);
+                    }
+                    payable += ph;
+                }
+
+                return { ...person, days, total, payable };
+            });
+
+            // Day totals
+            this.dayTotals = {};
+            this.grandTotal = 0;
+            this.grandPayable = 0;
+
+            for (const d of this.weekDays) {
+                let daySum = 0;
+                for (const person of this.gridRows) {
+                    daySum += person.days[d.iso] || 0;
+                }
+                this.dayTotals[d.iso] = daySum;
+            }
+
+            for (const person of this.gridRows) {
+                this.grandTotal += person.total;
+                this.grandPayable += person.payable;
+            }
+        },
+
+        async downloadPDF() {
+            const bm = this.applyBreak ? this.modalBreakMinutes : 0;
+            const bt = this.modalBreakThreshold;
+
+            // Also update the on-screen view
+            this.breakMinutes = bm;
+            this.breakThreshold = bt;
+            this.buildGrid();
+
+            let url = `/admin/reports/payroll/pdf?start_date=${this.weekStart}&end_date=${this.weekEnd}&break_minutes=${bm}&break_threshold=${bt}`;
+            if (this.currentUser?.role === 'super_admin') {
+                url += `&tenant_id=${this.selectedTenantId}`;
+            }
+
+            this.showBreakModal = false;
+
+            try {
+                const resp = await fetch(url);
+                if (resp.ok) {
+                    const blob = await resp.blob();
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `payroll_${this.weekStart}_to_${this.weekEnd}.pdf`;
+                    a.click();
+                    URL.revokeObjectURL(a.href);
+                    this.showToast('PDF downloaded', 'success');
+                } else {
+                    this.showToast('Failed to generate PDF', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error downloading PDF', 'error');
+            }
+        },
+
+        showToast(message, type = 'success') {
+            this.toast = { show: true, message, type };
+            setTimeout(() => this.toast.show = false, 3000);
+        }
+    };
+}
+</script>
+{% endblock %}

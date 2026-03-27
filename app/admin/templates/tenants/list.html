@@ -395,6 +395,52 @@
                                 </div>
                             </div>
                         </template>
+
+                        <!-- Reports Configuration (Super Admin Only) -->
+                        <template x-if="isSuperAdmin">
+                            <div>
+                                <div class="divider"></div>
+                                <div class="cursor-pointer select-none"
+                                     @click="toggleReportsPanel(tenant.id)">
+                                    <div class="flex justify-between items-center">
+                                        <h3 class="font-semibold text-lg">Reports Configuration</h3>
+                                        <div class="flex items-center gap-2">
+                                            <span class="badge badge-ghost"
+                                                  x-text="countEnabledReports(tenant.id) + ' reports enabled'"></span>
+                                            <svg xmlns="http://www.w3.org/2000/svg"
+                                                 class="h-5 w-5 transition-transform duration-200"
+                                                 :class="{'rotate-180': reportsExpanded[tenant.id]}"
+                                                 fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                                            </svg>
+                                        </div>
+                                    </div>
+                                    <p class="text-sm text-base-content/50 mt-1">Control which reports are available for this company</p>
+                                </div>
+
+                                <div x-show="reportsExpanded[tenant.id]" x-transition x-cloak class="mt-4">
+                                    <div x-show="loadingReports[tenant.id]" class="flex justify-center py-6">
+                                        <span class="loading loading-spinner loading-md"></span>
+                                    </div>
+
+                                    <div x-show="!loadingReports[tenant.id] && tenantReports[tenant.id]"
+                                         class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <template x-for="(report, idx) in (tenantReports[tenant.id] || [])" :key="report.report_type">
+                                            <div class="flex items-center justify-between p-4 rounded-lg border transition-colors duration-200"
+                                                 :class="report.is_enabled ? 'border-success/30 bg-success/5' : 'border-base-300 bg-base-200/30'">
+                                                <div class="mr-4">
+                                                    <div class="font-medium" x-text="report.label"></div>
+                                                    <div class="text-sm text-base-content/50" x-text="reportDescriptions[report.report_type] || ''"></div>
+                                                </div>
+                                                <input type="checkbox" class="toggle toggle-success"
+                                                       :checked="report.is_enabled"
+                                                       @change="toggleReport(tenant.id, report.report_type, idx)" />
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
                     </div>
                 </div>
             </template>
@@ -434,6 +480,19 @@ function settingsPage() {
         creatingAdmin: {},
         newAdmin: {},
         resetPasswordModal: { tenantId: null, adminId: null, username: '', password: '', saving: false },
+
+        // Reports Configuration
+        tenantReports: {},
+        reportsExpanded: {},
+        loadingReports: {},
+        reportDescriptions: {
+            'timesheets': 'View and filter timesheet entries by user, site and date',
+            'qr_signons': 'QR code sign-on records and attendance tracking',
+            'voice_notes': 'Voice note recordings and transcriptions',
+            'payroll_weekly': 'Weekly hours grid for payroll processing with break deductions',
+            'site_weekly': 'Site-level weekly report with hours, work completed and risks',
+            'site_progress': 'Multi-week progress report with client and internal versions',
+        },
 
         toast: { show: false, message: '', type: 'success' },
 
@@ -619,6 +678,54 @@ function settingsPage() {
             if (this.skillsExpanded[tenantId] && !this.tenantSkills[tenantId]) {
                 this.loadTenantSkills(tenantId);
             }
+        },
+
+        // Reports Configuration
+        toggleReportsPanel(tenantId) {
+            this.reportsExpanded[tenantId] = !this.reportsExpanded[tenantId];
+            if (this.reportsExpanded[tenantId] && !this.tenantReports[tenantId]) {
+                this.loadTenantReports(tenantId);
+            }
+        },
+
+        async loadTenantReports(tenantId) {
+            this.loadingReports[tenantId] = true;
+            try {
+                const response = await fetch(`/admin/tenants/${tenantId}/reports`, {
+                    credentials: 'same-origin'
+                });
+                const data = await response.json();
+                if (data.success) {
+                    this.tenantReports[tenantId] = data.reports;
+                }
+            } catch (err) {
+                this.showToast('Failed to load report config', 'error');
+            }
+            this.loadingReports[tenantId] = false;
+        },
+
+        async toggleReport(tenantId, reportType, idx) {
+            const report = this.tenantReports[tenantId][idx];
+            try {
+                const response = await fetch(`/admin/tenants/${tenantId}/reports/${reportType}/toggle`, {
+                    method: 'POST',
+                    credentials: 'same-origin'
+                });
+                const data = await response.json();
+                if (data.success) {
+                    report.is_enabled = data.is_enabled;
+                    this.showToast(`Report ${data.is_enabled ? 'enabled' : 'disabled'}`);
+                } else {
+                    this.showToast(data.error || 'Failed to update report', 'error');
+                }
+            } catch (err) {
+                this.showToast('Failed to update report', 'error');
+            }
+        },
+
+        countEnabledReports(tenantId) {
+            const reports = this.tenantReports[tenantId] || [];
+            return reports.filter(r => r.is_enabled).length;
         },
 
         // --- Admin Access ---
