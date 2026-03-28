@@ -55,10 +55,10 @@ class TimesheetAssistant(BaseAssistant):
         }
 
     def get_model_config(self) -> Dict:
-        """Model configuration for Jill (GPT-4o-mini for cost efficiency)"""
+        """Model configuration for Jill (GPT-4o for reliable instruction following)"""
         return {
             "provider": "openai",
-            "model": "gpt-4o-mini",
+            "model": "gpt-4o",
             "temperature": 0.4,
             "maxTokens": 1200
         }
