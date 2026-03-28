@@ -1,16 +1,17 @@
 # app/admin/pdf_generator.py - PDF report generation using reportlab
 import io
 from datetime import datetime, date
-from typing import List, Dict, Any, Optional, Optional
+from typing import List, Dict, Any, Optional
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.units import mm, cm
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import (
     SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer,
-    PageBreak, HRFlowable, KeepTogether
+    PageBreak, HRFlowable, KeepTogether, Image
 )
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+import os
 
 
 # Brand colours
@@ -919,6 +920,220 @@ def generate_site_progress_pdf(
         ))
 
         elements.append(KeepTogether(week_elements))
+
+    # Build PDF
+    doc.build(elements, onFirstPage=_add_footer, onLaterPages=_add_footer)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+# ============================================
+# REPORT 4: INVOICE PDF
+# ============================================
+
+def generate_invoice_pdf(
+    tenant_name: str,
+    invoice_number: str,
+    invoice_date: date,
+    period_start: date,
+    period_end: date,
+    platform_fee: float,
+    platform_discount_percent: float,
+    platform_fee_after_discount: float,
+    total_call_cost: float,
+    total_amount: float,
+    line_items: List[Dict[str, Any]],
+) -> bytes:
+    """Generate a tenant-facing invoice PDF (portrait A4)."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        topMargin=15*mm,
+        bottomMargin=20*mm,
+        leftMargin=15*mm,
+        rightMargin=15*mm,
+    )
+
+    styles = get_styles()
+    elements = []
+
+    # Header: JOURN3Y branding with logo (matching web app style)
+    PINK = colors.HexColor("#E91E8C")
+    brand_style = ParagraphStyle(
+        'BrandName',
+        fontName='Helvetica-Bold',
+        fontSize=24,
+        leading=28,
+        textColor=NAVY,
+    )
+    brand_text = 'JOURN<font color="#E91E8C">3</font>Y'
+
+    logo_path = os.path.join(os.path.dirname(__file__), "static", "images", "journ3y-logo.png")
+    if os.path.exists(logo_path):
+        logo = Image(logo_path, width=15*mm, height=15*mm)
+        header_content = [
+            [logo, Paragraph(brand_text, brand_style)],
+            ["", Paragraph("Tax Invoice", styles['SectionHeading'])],
+        ]
+        header_table = Table(
+            header_content,
+            colWidths=[19*mm, doc.width - 19*mm],
+        )
+        header_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+            ('SPAN', (0, 0), (0, 1)),
+        ]))
+        elements.append(header_table)
+    else:
+        elements.append(Paragraph(brand_text, brand_style))
+        elements.append(Paragraph("Tax Invoice", styles['SectionHeading']))
+    elements.append(HRFlowable(
+        width="100%", thickness=1, color=NAVY,
+        spaceAfter=4*mm, spaceBefore=2*mm
+    ))
+
+    # Invoice metadata + Bill To (side by side via table)
+    period_label = f"{period_start.strftime('%d %b %Y')} — {period_end.strftime('%d %b %Y')}"
+    meta_left = [
+        Paragraph("<b>Bill To:</b>", styles['BodyText2']),
+        Paragraph(tenant_name, styles['SubSectionHeading']),
+    ]
+    meta_right = [
+        Paragraph(f"<b>Invoice:</b> {invoice_number}", styles['BodyText2']),
+        Paragraph(f"<b>Date:</b> {invoice_date.strftime('%d %b %Y')}", styles['BodyText2']),
+        Paragraph(f"<b>Period:</b> {period_label}", styles['BodyText2']),
+    ]
+
+    meta_table = Table(
+        [[meta_left, meta_right]],
+        colWidths=[doc.width * 0.5, doc.width * 0.5],
+    )
+    meta_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    elements.append(meta_table)
+    elements.append(Spacer(1, 6*mm))
+
+    # Summary table
+    elements.append(Paragraph("Summary", styles['SectionHeading']))
+
+    summary_data = [
+        ["Description", "Amount"],
+        ["Jill Platform Fee", f"${platform_fee:,.2f}"],
+    ]
+    if platform_discount_percent > 0:
+        summary_data.append([
+            f"  Discount ({platform_discount_percent:.0f}%)",
+            f"-${platform_fee - platform_fee_after_discount:,.2f}"
+        ])
+        summary_data.append([
+            "  Platform Fee (after discount)",
+            f"${platform_fee_after_discount:,.2f}"
+        ])
+    summary_data.append([
+        f"Call Charges ({len(line_items)} calls)",
+        f"${total_call_cost:,.2f}"
+    ])
+    summary_data.append(["", ""])
+    summary_data.append(["TOTAL (AUD)", f"${total_amount:,.2f}"])
+
+    summary_table = Table(
+        summary_data,
+        colWidths=[doc.width * 0.65, doc.width * 0.35],
+    )
+    summary_style = [
+        ('BACKGROUND', (0, 0), (-1, 0), NAVY),
+        ('TEXTCOLOR', (0, 0), (-1, 0), WHITE),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('FONTNAME', (0, 1), (-1, -2), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -2), 9),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, -1), (-1, -1), 10),
+        ('LINEABOVE', (0, -1), (-1, -1), 1, NAVY),
+        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [WHITE, LIGHT_GREY]),
+    ]
+    summary_table.setStyle(TableStyle(summary_style))
+    elements.append(summary_table)
+    elements.append(Spacer(1, 8*mm))
+
+    # Call detail table
+    elements.append(Paragraph("Call Detail", styles['SectionHeading']))
+
+    call_type_labels = {
+        'timesheet': 'Timesheet',
+        'voice_notes': 'Voice Note',
+        'site_updates': 'Site Update',
+    }
+
+    detail_header = ["Date", "Time", "User", "Type", "Site", "Duration", "Cost"]
+    detail_data = [detail_header]
+
+    for item in line_items:
+        call_dt = item.get("call_date", "")
+        if call_dt:
+            try:
+                dt = datetime.fromisoformat(str(call_dt).replace("Z", "+00:00"))
+                date_str = dt.strftime("%d/%m/%Y")
+                time_str = dt.strftime("%I:%M %p")
+            except Exception:
+                date_str = str(call_dt)[:10]
+                time_str = ""
+        else:
+            date_str = "-"
+            time_str = "-"
+
+        dur_secs = int(item.get("duration_seconds") or 0)
+        dur_str = f"{dur_secs // 60}m {dur_secs % 60}s" if dur_secs > 0 else "-"
+
+        detail_data.append([
+            date_str,
+            time_str,
+            Paragraph(str(item.get("user_name", "")), styles['SmallGrey']),
+            call_type_labels.get(item.get("call_type", ""), item.get("call_type", "")),
+            Paragraph(str(item.get("site_name", "") or ""), styles['SmallGrey']),
+            dur_str,
+            f"${float(item.get('unit_cost') or 0):,.2f}",
+        ])
+
+    col_widths = [
+        doc.width * 0.12,
+        doc.width * 0.10,
+        doc.width * 0.18,
+        doc.width * 0.12,
+        doc.width * 0.25,
+        doc.width * 0.10,
+        doc.width * 0.13,
+    ]
+
+    detail_table = Table(detail_data, colWidths=col_widths, repeatRows=1)
+    detail_style = [
+        ('BACKGROUND', (0, 0), (-1, 0), NAVY),
+        ('TEXTCOLOR', (0, 0), (-1, 0), WHITE),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 8),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -1), 8),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [WHITE, LIGHT_GREY]),
+        ('ALIGN', (-1, 0), (-1, -1), 'RIGHT'),
+        ('ALIGN', (-2, 0), (-2, -1), 'CENTER'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('LINEBELOW', (0, 0), (-1, 0), 0.5, WHITE),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]
+    detail_table.setStyle(TableStyle(detail_style))
+    elements.append(detail_table)
 
     # Build PDF
     doc.build(elements, onFirstPage=_add_footer, onLaterPages=_add_footer)

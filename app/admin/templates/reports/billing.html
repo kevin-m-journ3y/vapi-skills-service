@@ -1,0 +1,558 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Billing & Invoicing{% endblock %}
+
+{% block content %}
+<div x-data="billingDashboard()" x-init="init()">
+    <!-- Toast -->
+    <div x-show="toast.show" x-transition class="toast toast-bottom toast-end z-50" x-cloak>
+        <div class="alert" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'">
+            <span x-text="toast.message"></span>
+        </div>
+    </div>
+
+    <!-- Page Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h2 class="text-3xl font-bold">Billing & Invoicing</h2>
+            <p class="text-base-content/70 mt-1">Generate and manage tenant invoices</p>
+        </div>
+    </div>
+
+    <!-- Tenant Selector -->
+    <div class="mb-4">
+        <label class="label label-text text-xs font-semibold">Tenant</label>
+        <select class="select select-bordered w-full max-w-xs" x-model="selectedTenantId" @change="onTenantChange()">
+            <option value="">Select a tenant...</option>
+            <template x-for="tenant in availableTenants" :key="tenant.id">
+                <option :value="tenant.id" x-text="tenant.name"></option>
+            </template>
+        </select>
+    </div>
+
+    <!-- Date Range Row -->
+    <div class="card bg-base-100 shadow mb-4" x-show="selectedTenantId" x-cloak>
+        <div class="card-body py-3">
+            <div class="flex flex-wrap gap-3 items-end">
+                <div class="form-control">
+                    <label class="label label-text text-xs">From</label>
+                    <input type="date" class="input input-bordered input-sm" x-model="startDate" />
+                </div>
+                <div class="form-control">
+                    <label class="label label-text text-xs">To</label>
+                    <input type="date" class="input input-bordered input-sm" x-model="endDate" />
+                </div>
+                <div class="flex gap-1 items-end pb-0.5">
+                    <button class="btn btn-sm btn-outline" @click="setThisMonth()">This Month</button>
+                    <button class="btn btn-sm btn-outline" @click="setLastMonth()">Last Month</button>
+                    <button class="btn btn-sm btn-outline" @click="setMonthsAgo(2)">
+                        <span x-text="new Date(new Date().getFullYear(), new Date().getMonth() - 2, 1).toLocaleString('en-AU', { month: 'short', year: 'numeric' })"></span>
+                    </button>
+                    <button class="btn btn-sm btn-outline" @click="setMonthsAgo(3)">
+                        <span x-text="new Date(new Date().getFullYear(), new Date().getMonth() - 3, 1).toLocaleString('en-AU', { month: 'short', year: 'numeric' })"></span>
+                    </button>
+                </div>
+                <div class="flex items-end pb-1 ml-2">
+                    <span class="text-xs text-base-content/60 mr-1">Last invoiced:</span>
+                    <span class="badge badge-info badge-sm" x-text="lastInvoicedDate ? formatDate(lastInvoicedDate) : 'Never'"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Billing Config Card (collapsible) -->
+    <div class="collapse collapse-arrow bg-base-100 shadow mb-4" x-show="selectedTenantId" x-cloak>
+        <input type="checkbox" />
+        <div class="collapse-title font-semibold">
+            Billing Configuration
+        </div>
+        <div class="collapse-content">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                <div class="form-control">
+                    <label class="label label-text text-xs">Platform Fee ($)</label>
+                    <input type="number" step="0.01" class="input input-bordered input-sm" x-model.number="config.platform_fee" />
+                </div>
+                <div class="form-control">
+                    <label class="label label-text text-xs">Platform Discount (%)</label>
+                    <input type="number" min="0" max="100" class="input input-bordered input-sm" x-model.number="config.platform_discount_percent" />
+                </div>
+                <div class="form-control">
+                    <label class="label label-text text-xs">Cost per Timesheet Call ($)</label>
+                    <input type="number" step="0.01" class="input input-bordered input-sm" x-model.number="config.cost_per_call_timesheet" />
+                </div>
+                <div class="form-control">
+                    <label class="label label-text text-xs">Cost per Voice Note Call ($)</label>
+                    <input type="number" step="0.01" class="input input-bordered input-sm" x-model.number="config.cost_per_call_voice_notes" />
+                </div>
+                <div class="form-control">
+                    <label class="label label-text text-xs">Cost per Site Update Call ($)</label>
+                    <input type="number" step="0.01" class="input input-bordered input-sm" x-model.number="config.cost_per_call_site_updates" />
+                </div>
+                <div class="form-control">
+                    <label class="label label-text text-xs">USD to AUD Rate</label>
+                    <input type="number" step="0.0001" class="input input-bordered input-sm" x-model.number="config.usd_to_aud_rate" />
+                </div>
+                <div class="form-control">
+                    <label class="label label-text text-xs">Billing Start Date</label>
+                    <input type="date" class="input input-bordered input-sm" x-model="config.billing_start_date" />
+                </div>
+                <div class="form-control">
+                    <label class="label label-text text-xs">Invoice Prefix</label>
+                    <input type="text" class="input input-bordered input-sm" x-model="config.invoice_prefix" placeholder="INV" />
+                </div>
+            </div>
+            <div class="mt-4 flex justify-end">
+                <button class="btn btn-primary btn-sm" @click="saveConfig()" :disabled="configSaving">
+                    <span x-show="configSaving" class="loading loading-spinner loading-xs"></span>
+                    Save Config
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Preview Section -->
+    <div x-show="selectedTenantId" x-cloak>
+        <div class="flex items-center gap-3 mb-4">
+            <button class="btn btn-primary" @click="preview()" :disabled="previewing">
+                <span x-show="previewing" class="loading loading-spinner loading-sm"></span>
+                <span x-show="!previewing">Preview Invoice</span>
+                <span x-show="previewing">Loading...</span>
+            </button>
+        </div>
+
+        <!-- Preview Results -->
+        <template x-if="previewData">
+            <div>
+                <!-- Summary Stat Cards -->
+                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+                    <div class="stat bg-base-100 shadow rounded-box p-3">
+                        <div class="stat-title text-xs">Total Calls</div>
+                        <div class="stat-value text-lg" x-text="previewData.summary.total_calls"></div>
+                    </div>
+                    <div class="stat bg-base-100 shadow rounded-box p-3">
+                        <div class="stat-title text-xs">Billed Amount</div>
+                        <div class="stat-value text-lg" x-text="formatCurrency(previewData.summary.total_billed)"></div>
+                    </div>
+                    <div class="stat bg-base-100 shadow rounded-box p-3">
+                        <div class="stat-title text-xs">Actual Cost AUD</div>
+                        <div class="stat-value text-lg" x-text="formatCurrency(previewData.summary.total_actual_aud)"></div>
+                    </div>
+                    <div class="stat bg-base-100 shadow rounded-box p-3">
+                        <div class="stat-title text-xs">Margin</div>
+                        <div class="stat-value text-lg" x-text="formatCurrency(previewData.summary.margin)"></div>
+                        <div class="stat-desc text-xs" x-text="previewData.summary.margin_percent + '%'"></div>
+                    </div>
+                    <div class="stat bg-base-100 shadow rounded-box p-3">
+                        <div class="stat-title text-xs">Platform Fee</div>
+                        <div class="stat-value text-lg" x-text="formatCurrency(previewData.summary.platform_fee)"></div>
+                        <div class="stat-desc text-xs" x-show="previewData.summary.platform_discount_percent > 0" x-text="previewData.summary.platform_discount_percent + '% discount applied'"></div>
+                    </div>
+                    <div class="stat bg-base-100 shadow rounded-box p-3">
+                        <div class="stat-title text-xs">Total Invoice</div>
+                        <div class="stat-value text-lg text-primary" x-text="formatCurrency(previewData.summary.total_amount)"></div>
+                    </div>
+                </div>
+
+                <!-- Breakdown by Call Type -->
+                <div class="card bg-base-100 shadow mb-4">
+                    <div class="card-body py-3">
+                        <h3 class="font-semibold text-sm mb-2">Breakdown by Call Type</h3>
+                        <div class="overflow-x-auto">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Type</th>
+                                        <th class="text-right">Count</th>
+                                        <th class="text-right">Rate</th>
+                                        <th class="text-right">Subtotal</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <template x-for="type in Object.keys(previewData.summary.type_breakdown || {})" :key="type">
+                                        <tr>
+                                            <td x-text="formatCallType(type)"></td>
+                                            <td class="text-right" x-text="previewData.summary.type_breakdown[type].count"></td>
+                                            <td class="text-right" x-text="formatCurrency(previewData.summary.type_breakdown[type].rate)"></td>
+                                            <td class="text-right" x-text="formatCurrency(previewData.summary.type_breakdown[type].subtotal)"></td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Call Detail Table -->
+                <div class="card bg-base-100 shadow mb-4">
+                    <div class="card-body py-3">
+                        <h3 class="font-semibold text-sm mb-2">Call Details</h3>
+                        <div class="overflow-x-auto">
+                            <table class="table table-sm table-zebra">
+                                <thead>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>Time</th>
+                                        <th>User</th>
+                                        <th>Number Called</th>
+                                        <th>Type</th>
+                                        <th>Site</th>
+                                        <th class="text-center">Status</th>
+                                        <th class="text-right">Duration</th>
+                                        <th class="text-right">Actual (AUD)</th>
+                                        <th class="text-right">Billed</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <template x-for="(call, idx) in previewData.calls" :key="idx">
+                                        <tr>
+                                            <td x-text="formatDate(call.call_date)"></td>
+                                            <td x-text="formatTime(call.call_date)"></td>
+                                            <td x-text="call.user_name || '-'"></td>
+                                            <td class="text-xs" x-text="call.number_called || '-'"></td>
+                                            <td x-text="formatCallType(call.call_type)"></td>
+                                            <td x-text="call.site_name || '-'"></td>
+                                            <td class="text-center">
+                                                <span class="badge badge-sm" :class="call.completed ? 'badge-success' : 'badge-ghost'" x-text="call.completed ? 'Completed' : 'Incomplete'"></span>
+                                            </td>
+                                            <td class="text-right" x-text="formatDuration(call.duration_seconds)"></td>
+                                            <td class="text-right" x-text="formatCurrency(call.actual_cost_aud)"></td>
+                                            <td class="text-right" x-text="formatCurrency(call.unit_cost)"></td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                            <div x-show="previewData.calls.length === 0" class="text-center py-4 text-base-content/50">
+                                No calls found for this period.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Generate Invoice Button -->
+                <div class="flex justify-end mb-6">
+                    <button class="btn btn-success" @click="generateInvoice()" :disabled="generating">
+                        <span x-show="generating" class="loading loading-spinner loading-sm"></span>
+                        <svg x-show="!generating" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        Generate Invoice
+                    </button>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <!-- Invoice History Section -->
+    <div x-show="selectedTenantId" x-cloak>
+        <div class="divider"></div>
+        <h3 class="text-xl font-bold mb-4">Invoice History</h3>
+
+        <div x-show="invoicesLoading" class="flex justify-center py-8">
+            <span class="loading loading-spinner loading-lg"></span>
+        </div>
+
+        <div x-show="!invoicesLoading && invoices.length === 0" class="text-center py-8 text-base-content/50">
+            No invoices yet for this tenant.
+        </div>
+
+        <div x-show="!invoicesLoading && invoices.length > 0" class="card bg-base-100 shadow">
+            <div class="card-body py-3">
+                <div class="overflow-x-auto">
+                    <table class="table table-sm table-zebra">
+                        <thead>
+                            <tr>
+                                <th>Invoice #</th>
+                                <th>Period</th>
+                                <th class="text-right">Calls</th>
+                                <th class="text-right">Billed</th>
+                                <th class="text-right">Actual Cost</th>
+                                <th class="text-right">Margin</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="inv in invoices" :key="inv.id">
+                                <tr>
+                                    <td class="font-mono text-sm" x-text="inv.invoice_number"></td>
+                                    <td>
+                                        <span x-text="formatDate(inv.period_start)"></span>
+                                        <span class="text-base-content/40 mx-1">-</span>
+                                        <span x-text="formatDate(inv.period_end)"></span>
+                                    </td>
+                                    <td class="text-right" x-text="inv.total_calls"></td>
+                                    <td class="text-right" x-text="formatCurrency(inv.total_amount)"></td>
+                                    <td class="text-right" x-text="formatCurrency(inv.total_actual_cost_aud)"></td>
+                                    <td class="text-right" x-text="formatCurrency(inv.total_amount - inv.total_actual_cost_aud)"></td>
+                                    <td>
+                                        <select
+                                            class="select select-ghost select-xs"
+                                            :value="inv.status"
+                                            @change="updateStatus(inv.id, $event.target.value)"
+                                        >
+                                            <option value="draft">Draft</option>
+                                            <option value="sent">Sent</option>
+                                            <option value="paid">Paid</option>
+                                        </select>
+                                        <span
+                                            class="badge badge-sm ml-1"
+                                            :class="{
+                                                'badge-ghost': inv.status === 'draft',
+                                                'badge-info': inv.status === 'sent',
+                                                'badge-success': inv.status === 'paid'
+                                            }"
+                                            x-text="inv.status"
+                                        ></span>
+                                    </td>
+                                    <td>
+                                        <button class="btn btn-ghost btn-xs" @click="downloadPdf(inv.id)" title="Download PDF">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                            </svg>
+                                            PDF
+                                        </button>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function billingDashboard() {
+    return {
+        // Auth
+        currentUser: null,
+        userRole: '',
+
+        // Tenants
+        availableTenants: [],
+        selectedTenantId: '',
+
+        // Date range
+        startDate: '',
+        endDate: '',
+
+        // Config
+        config: {
+            platform_fee: 500.00,
+            platform_discount_percent: 0,
+            cost_per_call_timesheet: 1.00,
+            cost_per_call_voice_notes: 1.00,
+            cost_per_call_site_updates: 2.00,
+            usd_to_aud_rate: 1.5500,
+            billing_start_date: '',
+            invoice_prefix: 'INV'
+        },
+        configSaving: false,
+
+        // Preview
+        previewData: null,
+        previewing: false,
+
+        // Invoices
+        invoices: [],
+        invoicesLoading: false,
+        lastInvoicedDate: null,
+
+        // Generate
+        generating: false,
+
+        // Toast
+        toast: { show: false, message: '', type: 'success' },
+
+        async init() {
+            // Get current user
+            const resp = await fetch('/admin/auth/me');
+            if (resp.ok) {
+                const data = await resp.json();
+                this.currentUser = data.user;
+                this.userRole = data.user.role;
+            }
+
+            // Load tenants
+            const tResp = await fetch('/admin/tenants/data');
+            if (tResp.ok) {
+                const tData = await tResp.json();
+                this.availableTenants = tData.tenants || [];
+            }
+
+            // Default date range to current month
+            this.setThisMonth();
+        },
+
+        setThisMonth() {
+            const now = new Date();
+            this.startDate = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+            this.endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+        },
+
+        setLastMonth() {
+            const now = new Date();
+            this.startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split('T')[0];
+            this.endDate = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().split('T')[0];
+        },
+
+        setMonthsAgo(n) {
+            const now = new Date();
+            this.startDate = new Date(now.getFullYear(), now.getMonth() - n, 1).toISOString().split('T')[0];
+            this.endDate = new Date(now.getFullYear(), now.getMonth() - n + 1, 0).toISOString().split('T')[0];
+        },
+
+        async onTenantChange() {
+            if (!this.selectedTenantId) return;
+            this.previewData = null;
+            await Promise.all([this.loadConfig(), this.loadInvoices()]);
+        },
+
+        async loadConfig() {
+            const resp = await fetch(`/admin/billing/config/${this.selectedTenantId}`);
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.success && data.config) {
+                    this.config = { ...this.config, ...data.config };
+                }
+            }
+        },
+
+        async saveConfig() {
+            this.configSaving = true;
+            try {
+                const resp = await fetch(`/admin/billing/config/${this.selectedTenantId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.config)
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.showToast('Config saved', 'success');
+                } else {
+                    this.showToast('Error: ' + (data.error || 'Unknown'), 'error');
+                }
+            } finally {
+                this.configSaving = false;
+            }
+        },
+
+        async preview() {
+            if (!this.selectedTenantId) return this.showToast('Select a tenant first', 'error');
+            this.previewing = true;
+            this.previewData = null;
+            try {
+                const params = new URLSearchParams({
+                    tenant_id: this.selectedTenantId,
+                    start_date: this.startDate,
+                    end_date: this.endDate
+                });
+                const resp = await fetch(`/admin/billing/preview?${params}`);
+                const data = await resp.json();
+                if (data.success) {
+                    this.previewData = data;
+                } else {
+                    this.showToast('Error: ' + (data.error || 'Unknown'), 'error');
+                }
+            } finally {
+                this.previewing = false;
+            }
+        },
+
+        async generateInvoice() {
+            if (!this.previewData) return;
+            this.generating = true;
+            try {
+                const resp = await fetch('/admin/billing/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tenant_id: this.selectedTenantId,
+                        start_date: this.startDate,
+                        end_date: this.endDate
+                    })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.showToast(`Invoice ${data.invoice.invoice_number} generated`, 'success');
+                    this.previewData = null;
+                    await this.loadInvoices();
+                } else {
+                    this.showToast('Error: ' + (data.error || 'Unknown'), 'error');
+                }
+            } finally {
+                this.generating = false;
+            }
+        },
+
+        async loadInvoices() {
+            if (!this.selectedTenantId) return;
+            this.invoicesLoading = true;
+            try {
+                const resp = await fetch(`/admin/billing/invoices?tenant_id=${this.selectedTenantId}`);
+                const data = await resp.json();
+                if (data.success) {
+                    this.invoices = data.invoices || [];
+                    // Set last invoiced date from most recent invoice
+                    this.lastInvoicedDate = this.invoices.length > 0 ? this.invoices[0].period_end : null;
+                }
+            } finally {
+                this.invoicesLoading = false;
+            }
+        },
+
+        async updateStatus(invoiceId, newStatus) {
+            const resp = await fetch(`/admin/billing/invoices/${invoiceId}/status`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: newStatus })
+            });
+            const data = await resp.json();
+            if (data.success) {
+                this.showToast(`Status updated to ${newStatus}`, 'success');
+                await this.loadInvoices();
+            }
+        },
+
+        downloadPdf(invoiceId) {
+            window.open(`/admin/billing/invoices/${invoiceId}/pdf`, '_blank');
+        },
+
+        formatDuration(seconds) {
+            if (!seconds) return '-';
+            const m = Math.floor(seconds / 60);
+            const s = seconds % 60;
+            return `${m}m ${s}s`;
+        },
+
+        formatCurrency(val) {
+            if (val === null || val === undefined) return '-';
+            return '$' + parseFloat(val).toFixed(2);
+        },
+
+        formatDate(dateStr) {
+            if (!dateStr) return '-';
+            const d = new Date(dateStr);
+            return d.toLocaleDateString('en-AU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        },
+
+        formatTime(dateStr) {
+            if (!dateStr) return '-';
+            const d = new Date(dateStr);
+            return d.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: true });
+        },
+
+        formatCallType(type) {
+            const map = { 'timesheet': 'Timesheet', 'voice_notes': 'Voice Note', 'site_updates': 'Site Update' };
+            return map[type] || type;
+        },
+
+        showToast(message, type = 'success') {
+            this.toast = { show: true, message, type };
+            setTimeout(() => { this.toast.show = false; }, 3000);
+        }
+    };
+}
+</script>
+{% endblock %}

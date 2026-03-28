@@ -3949,3 +3949,733 @@ async def site_notes_page(request: Request):
         "reports/site_notes.html",
         {"request": request, "page_title": "Site Notes"}
     )
+
+
+# ============================================
+# BILLING & INVOICING (Super Admin Only)
+# ============================================
+
+@router.get("/admin/billing", response_class=HTMLResponse)
+async def billing_page(request: Request):
+    """Billing & Invoicing dashboard - super admin only"""
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+    return templates.TemplateResponse(
+        "reports/billing.html",
+        {"request": request, "page_title": "Billing & Invoicing"}
+    )
+
+
+@router.get("/admin/billing/config/{tenant_id}")
+async def get_billing_config(tenant_id: str, request: Request):
+    """Get billing configuration for a tenant"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_billing_config",
+                headers=headers,
+                params={
+                    "tenant_id": f"eq.{tenant_id}",
+                    "select": "*"
+                }
+            )
+
+            if response.status_code == 200 and response.json():
+                config = response.json()[0]
+                return {"success": True, "config": config}
+            else:
+                # Return defaults
+                return {"success": True, "config": {
+                    "platform_fee": 500.00,
+                    "platform_discount_percent": 0,
+                    "cost_per_call_timesheet": 1.00,
+                    "cost_per_call_voice_notes": 1.00,
+                    "cost_per_call_site_updates": 2.00,
+                    "usd_to_aud_rate": 1.5500,
+                    "billing_start_date": None,
+                    "invoice_prefix": "INV"
+                }}
+
+    except Exception as e:
+        logger.error(f"Error fetching billing config: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/admin/billing/config/{tenant_id}")
+async def save_billing_config(tenant_id: str, request: Request):
+    """Save billing configuration for a tenant (upsert)"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    body = await request.json()
+
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                "Content-Type": "application/json",
+                "Prefer": "return=representation"
+            }
+
+            config_data = {
+                "tenant_id": tenant_id,
+                "platform_fee": body.get("platform_fee", 500.00),
+                "platform_discount_percent": body.get("platform_discount_percent", 0),
+                "cost_per_call_timesheet": body.get("cost_per_call_timesheet", 1.00),
+                "cost_per_call_voice_notes": body.get("cost_per_call_voice_notes", 1.00),
+                "cost_per_call_site_updates": body.get("cost_per_call_site_updates", 2.00),
+                "usd_to_aud_rate": body.get("usd_to_aud_rate", 1.5500),
+                "billing_start_date": body.get("billing_start_date") or None,
+                "invoice_prefix": body.get("invoice_prefix", "INV"),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+
+            # Check if exists
+            check = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_billing_config",
+                headers={
+                    "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={"tenant_id": f"eq.{tenant_id}", "select": "id"}
+            )
+
+            if check.status_code == 200 and check.json():
+                # Update existing
+                existing_id = check.json()[0]["id"]
+                await client.patch(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_billing_config",
+                    headers=headers,
+                    params={"id": f"eq.{existing_id}"},
+                    json=config_data
+                )
+            else:
+                # Create new
+                await client.post(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_billing_config",
+                    headers=headers,
+                    json=config_data
+                )
+
+            return {"success": True}
+
+    except Exception as e:
+        logger.error(f"Error saving billing config: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/admin/billing/preview")
+async def preview_billing(
+    request: Request,
+    tenant_id: str = "",
+    start_date: str = "",
+    end_date: str = "",
+):
+    """Preview billable calls for a tenant in a date range"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    if not tenant_id or not start_date or not end_date:
+        return {"success": False, "error": "tenant_id, start_date, and end_date required"}
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            # 1. Get billing config
+            config_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_billing_config",
+                headers=headers,
+                params={"tenant_id": f"eq.{tenant_id}", "select": "*"}
+            )
+            if config_resp.status_code == 200 and config_resp.json():
+                config = config_resp.json()[0]
+            else:
+                config = {
+                    "platform_fee": 500.00,
+                    "platform_discount_percent": 0,
+                    "cost_per_call_timesheet": 1.00,
+                    "cost_per_call_voice_notes": 1.00,
+                    "cost_per_call_site_updates": 2.00,
+                    "usd_to_aud_rate": 1.5500,
+                }
+
+            usd_to_aud = float(config.get("usd_to_aud_rate") or 1.55)
+
+            # 1b. Get Jill's phone number for this tenant
+            phone_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/qr_signon_config",
+                headers=headers,
+                params={"tenant_id": f"eq.{tenant_id}", "select": "jill_phone_number"}
+            )
+            jill_phone = ""
+            if phone_resp.status_code == 200 and phone_resp.json():
+                jill_phone = phone_resp.json()[0].get("jill_phone_number", "") or ""
+
+            # 2. Get calls from call_quality_assessments
+            calls_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/call_quality_assessments",
+                headers=headers,
+                params={
+                    "tenant_id": f"eq.{tenant_id}",
+                    "call_type": "neq.greeter",
+                    "and": f"(call_started_at.gte.{start_date}T00:00:00Z,call_started_at.lte.{end_date}T23:59:59Z)",
+                    "select": "vapi_call_id,user_id,call_type,call_duration_seconds,call_cost,call_started_at,caller_phone,success_evaluation,task_completed",
+                    "order": "call_started_at.asc",
+                    "limit": "10000"
+                }
+            )
+
+            if calls_resp.status_code != 200:
+                return {"success": False, "error": "Failed to fetch call data"}
+
+            all_calls = calls_resp.json()
+
+            # 3. Enrich with VAPI API data (duration + cost)
+            # CQA table often has null duration/cost, so fetch from VAPI API
+            vapi_api_key = os.getenv("VAPI_API_KEY")
+            vapi_data_cache = {}  # call_id -> {cost, duration}
+            if vapi_api_key:
+                try:
+                    # Fetch multiple pages if needed
+                    for page_offset in range(0, 500, 100):
+                        vapi_resp = await client.get(
+                            "https://api.vapi.ai/call",
+                            headers={"Authorization": f"Bearer {vapi_api_key}"},
+                            params={"limit": "100"},
+                            timeout=30.0,
+                        )
+                        if vapi_resp.status_code == 200:
+                            vapi_calls = vapi_resp.json()
+                            for vc in vapi_calls:
+                                vc_id = vc.get("id", "")
+                                vc_cost = float(vc.get("cost") or 0)
+                                vc_duration = 0
+                                started = vc.get("startedAt")
+                                ended = vc.get("endedAt")
+                                if started and ended:
+                                    try:
+                                        from datetime import datetime as dt_cls
+                                        s = dt_cls.fromisoformat(started.replace("Z", "+00:00"))
+                                        e = dt_cls.fromisoformat(ended.replace("Z", "+00:00"))
+                                        vc_duration = int((e - s).total_seconds())
+                                    except Exception:
+                                        pass
+                                vapi_data_cache[vc_id] = {"cost": vc_cost, "duration": vc_duration}
+                            if len(vapi_calls) < 100:
+                                break
+                        else:
+                            break
+                except Exception as e:
+                    logger.warning(f"Could not fetch VAPI call data: {e}")
+
+            # Filter billable calls: duration >= 30s
+            min_duration_seconds = 30
+            billable_calls = []
+
+            for c in all_calls:
+                vapi_call_id = c.get("vapi_call_id", "")
+                vapi_info = vapi_data_cache.get(vapi_call_id, {})
+
+                # Use VAPI API duration first, fall back to CQA
+                duration = vapi_info.get("duration", 0) or int(c.get("call_duration_seconds") or 0)
+                if duration < min_duration_seconds:
+                    continue
+
+                vapi_cost_usd = vapi_info.get("cost", 0) or float(c.get("call_cost") or 0)
+                vapi_cost_aud = vapi_cost_usd * usd_to_aud
+
+                c["call_duration_seconds"] = duration
+                c["actual_cost_usd"] = round(vapi_cost_usd, 4)
+                c["actual_cost_aud"] = round(vapi_cost_aud, 4)
+                billable_calls.append(c)
+
+            # 4. Enrich with user names
+            user_ids = list(set(c.get("user_id") for c in billable_calls if c.get("user_id")))
+            user_map = {}
+            if user_ids:
+                for i in range(0, len(user_ids), 50):
+                    batch = user_ids[i:i+50]
+                    user_resp = await client.get(
+                        f"{os.getenv('SUPABASE_URL')}/rest/v1/users",
+                        headers=headers,
+                        params={
+                            "id": f"in.({','.join(batch)})",
+                            "select": "id,name"
+                        }
+                    )
+                    if user_resp.status_code == 200:
+                        for u in user_resp.json():
+                            user_map[u["id"]] = u["name"]
+
+            # 5. Enrich with site names + completion status (via skill tables)
+            vapi_ids = [c["vapi_call_id"] for c in billable_calls if c.get("vapi_call_id")]
+            site_map = {}  # vapi_call_id -> site_name
+            completed_calls = set()  # vapi_call_ids where the skill objective was met
+
+            if vapi_ids:
+                # Timesheets — check for saved entries (proof of completion)
+                for i in range(0, len(vapi_ids), 50):
+                    batch = vapi_ids[i:i+50]
+                    ts_resp = await client.get(
+                        f"{os.getenv('SUPABASE_URL')}/rest/v1/timesheets",
+                        headers=headers,
+                        params={
+                            "vapi_call_id": f"in.({','.join(batch)})",
+                            "select": "vapi_call_id,site_id"
+                        }
+                    )
+                    if ts_resp.status_code == 200:
+                        site_ids_needed = set()
+                        ts_site_map = {}
+                        for ts in ts_resp.json():
+                            completed_calls.add(ts["vapi_call_id"])
+                            if ts.get("site_id"):
+                                site_ids_needed.add(ts["site_id"])
+                                ts_site_map[ts["vapi_call_id"]] = ts["site_id"]
+
+                        if site_ids_needed:
+                            ent_resp = await client.get(
+                                f"{os.getenv('SUPABASE_URL')}/rest/v1/entities",
+                                headers=headers,
+                                params={
+                                    "id": f"in.({','.join(site_ids_needed)})",
+                                    "select": "id,name"
+                                }
+                            )
+                            if ent_resp.status_code == 200:
+                                entity_names = {e["id"]: e["name"] for e in ent_resp.json()}
+                                for vcid, sid in ts_site_map.items():
+                                    site_map[vcid] = entity_names.get(sid, "")
+
+                # Voice notes — check for saved entries
+                for i in range(0, len(vapi_ids), 50):
+                    batch = vapi_ids[i:i+50]
+                    vn_resp = await client.get(
+                        f"{os.getenv('SUPABASE_URL')}/rest/v1/voice_notes",
+                        headers=headers,
+                        params={
+                            "vapi_call_id": f"in.({','.join(batch)})",
+                            "select": "vapi_call_id"
+                        }
+                    )
+                    if vn_resp.status_code == 200:
+                        for vn in vn_resp.json():
+                            completed_calls.add(vn["vapi_call_id"])
+
+                # Site progress updates — check for saved entries
+                for i in range(0, len(vapi_ids), 50):
+                    batch = vapi_ids[i:i+50]
+                    sp_resp = await client.get(
+                        f"{os.getenv('SUPABASE_URL')}/rest/v1/site_progress_updates",
+                        headers=headers,
+                        params={
+                            "vapi_call_id": f"in.({','.join(batch)})",
+                            "select": "vapi_call_id"
+                        }
+                    )
+                    if sp_resp.status_code == 200:
+                        for sp in sp_resp.json():
+                            completed_calls.add(sp["vapi_call_id"])
+
+            # 6. Build call list with billing rates
+            rate_map = {
+                "timesheet": float(config.get("cost_per_call_timesheet") or 1.00),
+                "voice_notes": float(config.get("cost_per_call_voice_notes") or 1.00),
+                "site_updates": float(config.get("cost_per_call_site_updates") or 2.00),
+            }
+
+            calls_list = []
+            type_breakdown = {}
+            total_billed = 0
+            total_actual_aud = 0
+
+            for c in billable_calls:
+                call_type = c.get("call_type", "unknown")
+                unit_cost = rate_map.get(call_type, 1.00)
+                actual_aud = c.get("actual_cost_aud", 0)
+
+                vapi_cid = c.get("vapi_call_id", "")
+                call_entry = {
+                    "call_date": c.get("call_started_at"),
+                    "user_name": user_map.get(c.get("user_id"), "Unknown"),
+                    "call_type": call_type,
+                    "site_name": site_map.get(vapi_cid, ""),
+                    "duration_seconds": int(c.get("call_duration_seconds") or 0),
+                    "unit_cost": unit_cost,
+                    "actual_cost_usd": c.get("actual_cost_usd", 0),
+                    "actual_cost_aud": actual_aud,
+                    "vapi_call_id": vapi_cid,
+                    "caller_phone": c.get("caller_phone", ""),
+                    "number_called": jill_phone,
+                    "completed": vapi_cid in completed_calls,
+                }
+                calls_list.append(call_entry)
+                total_billed += unit_cost
+                total_actual_aud += actual_aud
+
+                if call_type not in type_breakdown:
+                    type_breakdown[call_type] = {"count": 0, "rate": unit_cost, "subtotal": 0}
+                type_breakdown[call_type]["count"] += 1
+                type_breakdown[call_type]["subtotal"] += unit_cost
+
+            # 7. Platform fee
+            platform_fee = float(config.get("platform_fee") or 500.00)
+            discount_pct = float(config.get("platform_discount_percent") or 0)
+            platform_after_discount = round(platform_fee * (1 - discount_pct / 100), 2)
+            total_amount = round(total_billed + platform_after_discount, 2)
+
+            return {
+                "success": True,
+                "calls": calls_list,
+                "summary": {
+                    "total_calls": len(calls_list),
+                    "total_billed": round(total_billed, 2),
+                    "total_actual_aud": round(total_actual_aud, 2),
+                    "margin": round(total_billed - total_actual_aud, 2),
+                    "margin_percent": round((total_billed - total_actual_aud) / total_billed * 100, 1) if total_billed > 0 else 0,
+                    "platform_fee": platform_fee,
+                    "platform_discount_percent": discount_pct,
+                    "platform_fee_after_discount": platform_after_discount,
+                    "total_amount": total_amount,
+                    "type_breakdown": type_breakdown,
+                    "usd_to_aud_rate": usd_to_aud,
+                }
+            }
+
+    except Exception as e:
+        logger.error(f"Error previewing billing: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/admin/billing/generate")
+async def generate_invoice(request: Request):
+    """Generate an invoice from preview data"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    body = await request.json()
+    tenant_id = body.get("tenant_id")
+    start_date = body.get("start_date")
+    end_date = body.get("end_date")
+
+    if not tenant_id or not start_date or not end_date:
+        return {"success": False, "error": "tenant_id, start_date, and end_date required"}
+
+    try:
+        # First, run the preview to get fresh data
+        preview_result = await preview_billing(
+            request=request,
+            tenant_id=tenant_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        if not preview_result.get("success"):
+            return {"success": False, "error": preview_result.get("error", "Preview failed")}
+
+        calls = preview_result["calls"]
+        summary = preview_result["summary"]
+
+        async with httpx.AsyncClient() as client:
+            read_headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            # Check for overlapping invoices (calls already billed)
+            preview_vapi_ids = [c["vapi_call_id"] for c in calls if c.get("vapi_call_id")]
+            if preview_vapi_ids:
+                already_billed = set()
+                for i in range(0, len(preview_vapi_ids), 50):
+                    batch = preview_vapi_ids[i:i+50]
+                    li_resp = await client.get(
+                        f"{os.getenv('SUPABASE_URL')}/rest/v1/invoice_line_items",
+                        headers=read_headers,
+                        params={
+                            "vapi_call_id": f"in.({','.join(batch)})",
+                            "select": "vapi_call_id,invoice_id"
+                        }
+                    )
+                    if li_resp.status_code == 200:
+                        for li in li_resp.json():
+                            already_billed.add(li["vapi_call_id"])
+
+                if already_billed:
+                    overlap_count = len(already_billed)
+                    return {
+                        "success": False,
+                        "error": f"{overlap_count} call(s) in this period have already been invoiced. Adjust the date range to avoid overlap."
+                    }
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                "Content-Type": "application/json",
+                "Prefer": "return=representation"
+            }
+            read_headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            # Get invoice prefix from config
+            config_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenant_billing_config",
+                headers=read_headers,
+                params={"tenant_id": f"eq.{tenant_id}", "select": "invoice_prefix"}
+            )
+            prefix = "INV"
+            if config_resp.status_code == 200 and config_resp.json():
+                prefix = config_resp.json()[0].get("invoice_prefix") or "INV"
+
+            # Get next invoice number
+            inv_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/invoices",
+                headers=read_headers,
+                params={
+                    "tenant_id": f"eq.{tenant_id}",
+                    "select": "invoice_number",
+                    "order": "created_at.desc",
+                    "limit": "1"
+                }
+            )
+
+            next_num = 1
+            if inv_resp.status_code == 200 and inv_resp.json():
+                last_number = inv_resp.json()[0]["invoice_number"]
+                try:
+                    next_num = int(last_number.split("-")[-1]) + 1
+                except (ValueError, IndexError):
+                    next_num = 1
+
+            invoice_number = f"{prefix}-{next_num:03d}"
+
+            # Create invoice
+            invoice_data = {
+                "tenant_id": tenant_id,
+                "invoice_number": invoice_number,
+                "period_start": start_date,
+                "period_end": end_date,
+                "total_calls": summary["total_calls"],
+                "total_call_cost": summary["total_billed"],
+                "platform_fee": summary["platform_fee"],
+                "platform_discount_percent": summary["platform_discount_percent"],
+                "platform_fee_after_discount": summary["platform_fee_after_discount"],
+                "total_amount": summary["total_amount"],
+                "total_actual_cost_aud": summary["total_actual_aud"],
+                "usd_to_aud_rate": summary["usd_to_aud_rate"],
+                "status": "draft",
+            }
+
+            inv_create = await client.post(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/invoices",
+                headers=headers,
+                json=invoice_data
+            )
+
+            if inv_create.status_code not in (200, 201):
+                return {"success": False, "error": f"Failed to create invoice: {inv_create.text}"}
+
+            invoice = inv_create.json()[0]
+            invoice_id = invoice["id"]
+
+            # Create line items (bulk insert)
+            if calls:
+                line_items = []
+                for c in calls:
+                    line_items.append({
+                        "invoice_id": invoice_id,
+                        "call_date": c["call_date"],
+                        "user_name": c["user_name"],
+                        "call_type": c["call_type"],
+                        "site_name": c.get("site_name", ""),
+                        "duration_seconds": c["duration_seconds"],
+                        "unit_cost": c["unit_cost"],
+                        "actual_cost_usd": c.get("actual_cost_usd", 0),
+                        "actual_cost_aud": c.get("actual_cost_aud", 0),
+                        "vapi_call_id": c.get("vapi_call_id", ""),
+                    })
+
+                li_headers = {**headers, "Prefer": "return=minimal"}
+                await client.post(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/invoice_line_items",
+                    headers=li_headers,
+                    json=line_items
+                )
+
+            return {"success": True, "invoice": invoice}
+
+    except Exception as e:
+        logger.error(f"Error generating invoice: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/admin/billing/invoices")
+async def list_invoices(request: Request, tenant_id: str = ""):
+    """List invoices for a tenant"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    if not tenant_id:
+        return {"success": False, "error": "tenant_id required"}
+
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/invoices",
+                headers=headers,
+                params={
+                    "tenant_id": f"eq.{tenant_id}",
+                    "select": "*",
+                    "order": "created_at.desc"
+                }
+            )
+
+            if response.status_code == 200:
+                return {"success": True, "invoices": response.json()}
+            return {"success": False, "error": "Failed to fetch invoices"}
+
+    except Exception as e:
+        logger.error(f"Error listing invoices: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/admin/billing/invoices/{invoice_id}/status")
+async def update_invoice_status(invoice_id: str, request: Request):
+    """Update invoice status (draft/sent/paid)"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    body = await request.json()
+    new_status = body.get("status")
+
+    if new_status not in ("draft", "sent", "paid"):
+        return {"success": False, "error": "Invalid status"}
+
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal"
+            }
+
+            await client.patch(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/invoices",
+                headers=headers,
+                params={"id": f"eq.{invoice_id}"},
+                json={"status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}
+            )
+
+            return {"success": True}
+
+    except Exception as e:
+        logger.error(f"Error updating invoice status: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/admin/billing/invoices/{invoice_id}/pdf")
+async def download_invoice_pdf(invoice_id: str, request: Request):
+    """Generate and download invoice PDF"""
+    from fastapi.responses import Response
+    from app.admin.pdf_generator import generate_invoice_pdf
+
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+            }
+
+            # Get invoice
+            inv_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/invoices",
+                headers=headers,
+                params={"id": f"eq.{invoice_id}", "select": "*"}
+            )
+
+            if inv_resp.status_code != 200 or not inv_resp.json():
+                raise HTTPException(status_code=404, detail="Invoice not found")
+
+            invoice = inv_resp.json()[0]
+
+            # Get line items
+            li_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/invoice_line_items",
+                headers=headers,
+                params={
+                    "invoice_id": f"eq.{invoice_id}",
+                    "select": "*",
+                    "order": "call_date.asc"
+                }
+            )
+            line_items = li_resp.json() if li_resp.status_code == 200 else []
+
+            # Get tenant name
+            tenant_resp = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/tenants",
+                headers=headers,
+                params={"id": f"eq.{invoice['tenant_id']}", "select": "name"}
+            )
+            tenant_name = "Unknown"
+            if tenant_resp.status_code == 200 and tenant_resp.json():
+                tenant_name = tenant_resp.json()[0]["name"]
+
+            from datetime import date as date_type
+            pdf_bytes = generate_invoice_pdf(
+                tenant_name=tenant_name,
+                invoice_number=invoice["invoice_number"],
+                invoice_date=datetime.now().date(),
+                period_start=date_type.fromisoformat(invoice["period_start"]),
+                period_end=date_type.fromisoformat(invoice["period_end"]),
+                platform_fee=float(invoice.get("platform_fee") or 0),
+                platform_discount_percent=float(invoice.get("platform_discount_percent") or 0),
+                platform_fee_after_discount=float(invoice.get("platform_fee_after_discount") or 0),
+                total_call_cost=float(invoice.get("total_call_cost") or 0),
+                total_amount=float(invoice.get("total_amount") or 0),
+                line_items=line_items,
+            )
+
+            filename = f"invoice_{invoice['invoice_number']}_{tenant_name.replace(' ', '_')}.pdf"
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating invoice PDF: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
