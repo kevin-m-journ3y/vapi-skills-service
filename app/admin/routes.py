@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Request, Depends, HTTPException, Header, BackgroundTasks, UploadFile, File, Form
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, RedirectResponse
+import asyncio
 import httpx
 import os
 import hashlib
@@ -4120,15 +4121,33 @@ async def preview_billing(
 
             usd_to_aud = float(config.get("usd_to_aud_rate") or 1.55)
 
-            # 1b. Get Jill's phone number for this tenant
-            phone_resp = await client.get(
-                f"{os.getenv('SUPABASE_URL')}/rest/v1/qr_signon_config",
-                headers=headers,
-                params={"tenant_id": f"eq.{tenant_id}", "select": "jill_phone_number"}
+            # 1b. Get Jill's phone number + tenant timezone
+            phone_resp, tz_resp = await asyncio.gather(
+                client.get(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/qr_signon_config",
+                    headers=headers,
+                    params={"tenant_id": f"eq.{tenant_id}", "select": "jill_phone_number"}
+                ),
+                client.get(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/tenants",
+                    headers=headers,
+                    params={"id": f"eq.{tenant_id}", "select": "timezone"}
+                )
             )
             jill_phone = ""
             if phone_resp.status_code == 200 and phone_resp.json():
                 jill_phone = phone_resp.json()[0].get("jill_phone_number", "") or ""
+
+            # Convert date boundaries to UTC using the tenant's local timezone
+            # so that e.g. "31 Mar 23:59 AEST" doesn't bleed into April UTC calls
+            import pytz as pytz_mod
+            from datetime import datetime as dt_cls
+            tz_name = "Australia/Sydney"
+            if tz_resp.status_code == 200 and tz_resp.json():
+                tz_name = tz_resp.json()[0].get("timezone") or "Australia/Sydney"
+            tz = pytz_mod.timezone(tz_name)
+            start_utc = tz.localize(dt_cls.strptime(f"{start_date} 00:00:00", "%Y-%m-%d %H:%M:%S")).astimezone(pytz_mod.utc).isoformat()
+            end_utc = tz.localize(dt_cls.strptime(f"{end_date} 23:59:59", "%Y-%m-%d %H:%M:%S")).astimezone(pytz_mod.utc).isoformat()
 
             # 2. Get calls from call_quality_assessments
             calls_resp = await client.get(
@@ -4137,7 +4156,7 @@ async def preview_billing(
                 params={
                     "tenant_id": f"eq.{tenant_id}",
                     "call_type": "neq.greeter",
-                    "and": f"(call_started_at.gte.{start_date}T00:00:00Z,call_started_at.lte.{end_date}T23:59:59Z)",
+                    "and": f"(call_started_at.gte.{start_utc},call_started_at.lte.{end_utc})",
                     "select": "vapi_call_id,user_id,call_type,call_duration_seconds,call_cost,call_started_at,caller_phone,success_evaluation,task_completed",
                     "order": "call_started_at.asc",
                     "limit": "10000"
