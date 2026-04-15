@@ -144,8 +144,8 @@
                     </div>
                     <div class="stat bg-base-100 shadow rounded-box p-3">
                         <div class="stat-title text-xs">Platform Fee</div>
-                        <div class="stat-value text-lg" x-text="formatCurrency(previewData.summary.platform_fee)"></div>
-                        <div class="stat-desc text-xs" x-show="previewData.summary.platform_discount_percent > 0" x-text="previewData.summary.platform_discount_percent + '% discount applied'"></div>
+                        <div class="stat-value text-lg" x-text="formatCurrency(previewData.summary.platform_fee_after_discount)"></div>
+                        <div class="stat-desc text-xs" x-show="previewData.summary.platform_discount_percent > 0" x-text="previewData.summary.platform_discount_percent + '% off ' + formatCurrency(previewData.summary.platform_fee)"></div>
                     </div>
                     <div class="stat bg-base-100 shadow rounded-box p-3">
                         <div class="stat-title text-xs">Total Invoice</div>
