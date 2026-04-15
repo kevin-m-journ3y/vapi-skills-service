@@ -4601,6 +4601,44 @@ async def update_invoice_status(invoice_id: str, request: Request):
         return {"success": False, "error": str(e)}
 
 
+@router.delete("/admin/billing/invoices/{invoice_id}")
+async def delete_invoice(invoice_id: str, request: Request):
+    """Delete an invoice and its line items (super admin only)"""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {
+                "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                "Prefer": "return=minimal"
+            }
+
+            # Delete line items first (FK constraint)
+            await client.delete(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/invoice_line_items",
+                headers=headers,
+                params={"invoice_id": f"eq.{invoice_id}"}
+            )
+
+            # Delete the invoice
+            resp = await client.delete(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/invoices",
+                headers=headers,
+                params={"id": f"eq.{invoice_id}"}
+            )
+
+            if resp.status_code in (200, 204):
+                return {"success": True}
+            return {"success": False, "error": f"Delete failed: {resp.text}"}
+
+    except Exception as e:
+        logger.error(f"Error deleting invoice: {e}")
+        return {"success": False, "error": str(e)}
+
+
 @router.get("/admin/billing/invoices/{invoice_id}/pdf")
 async def download_invoice_pdf(invoice_id: str, request: Request):
     """Generate and download invoice PDF"""
