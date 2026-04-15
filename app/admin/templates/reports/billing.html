@@ -478,9 +478,12 @@ function billingDashboard() {
             if (!this.selectedTenantId) return;
             this.previewData = null;
             await Promise.all([this.loadConfig(), this.loadInvoices()]);
-            // Auto-set date range to current billing period if configured, else calendar month
+            // Auto-set date range: if billing start date configured, use last completed period
+            // (if today IS the start day, current period just started so default to last period)
             if (this.config.billing_start_date) {
-                this.setBillingPeriod(0);
+                const startDay = new Date(this.config.billing_start_date + 'T00:00:00').getDate();
+                const todayDay = new Date().getDate();
+                this.setBillingPeriod(todayDay === startDay ? 1 : 0);
             } else {
                 this.setThisMonth();
             }
