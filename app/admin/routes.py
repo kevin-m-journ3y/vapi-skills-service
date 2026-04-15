@@ -4004,7 +4004,7 @@ async def get_billing_config(tenant_id: str, request: Request):
                     "cost_per_call_voice_notes": 1.00,
                     "cost_per_call_site_updates": 2.00,
                     "usd_to_aud_rate": 1.5500,
-                    "billing_start_date": None,
+                    "billing_cycle_day": None,
                     "invoice_prefix": "INV"
                 }}
 
@@ -4039,7 +4039,7 @@ async def save_billing_config(tenant_id: str, request: Request):
                 "cost_per_call_voice_notes": body.get("cost_per_call_voice_notes", 1.00),
                 "cost_per_call_site_updates": body.get("cost_per_call_site_updates", 2.00),
                 "usd_to_aud_rate": body.get("usd_to_aud_rate", 1.5500),
-                "billing_start_date": body.get("billing_start_date") or None,
+                "billing_cycle_day": body.get("billing_cycle_day") or None,
                 "invoice_prefix": body.get("invoice_prefix", "INV"),
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }

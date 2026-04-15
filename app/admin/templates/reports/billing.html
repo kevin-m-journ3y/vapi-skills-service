@@ -30,49 +30,41 @@
         </select>
     </div>
 
-    <!-- Date Range Row -->
+    <!-- Period Selector -->
     <div class="card bg-base-100 shadow mb-4" x-show="selectedTenantId" x-cloak>
-        <div class="card-body py-3">
-            <div class="flex flex-wrap gap-3 items-end">
-                <div class="form-control">
-                    <label class="label label-text text-xs">From</label>
-                    <input type="date" class="input input-bordered input-sm" x-model="startDate" />
+        <div class="card-body py-4">
+            <template x-if="!config.billing_cycle_day">
+                <div class="flex items-center gap-2 text-sm text-warning">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M12 3a9 9 0 100 18A9 9 0 0012 3z" />
+                    </svg>
+                    Set a <strong class="mx-1">Billing Cycle Day</strong> in the configuration below to get started.
                 </div>
-                <div class="form-control">
-                    <label class="label label-text text-xs">To</label>
-                    <input type="date" class="input input-bordered input-sm" x-model="endDate" />
+            </template>
+            <template x-if="config.billing_cycle_day">
+                <div class="flex flex-wrap gap-4 items-end">
+                    <div class="form-control flex-1 min-w-64">
+                        <label class="label label-text text-xs font-semibold">Billing Period</label>
+                        <select class="select select-bordered" x-model="selectedPeriodKey" @change="onPeriodChange()">
+                            <option value="">Select a period to invoice...</option>
+                            <template x-for="period in billingPeriods" :key="period.key">
+                                <option :value="period.key" x-text="period.optionLabel"></option>
+                            </template>
+                        </select>
+                    </div>
+                    <template x-if="selectedPeriod">
+                        <div class="pb-1 flex flex-col gap-1">
+                            <div class="text-sm font-medium text-base-content/80" x-text="selectedPeriod.dateRange"></div>
+                            <div x-show="selectedPeriod.isInvoiced" class="badge badge-success badge-sm">Already invoiced</div>
+                            <div x-show="!selectedPeriod.isCompleted && !selectedPeriod.isInvoiced" class="badge badge-warning badge-sm">Period in progress</div>
+                        </div>
+                    </template>
+                    <div class="pb-1 ml-auto">
+                        <span class="text-xs text-base-content/60">Last invoiced: </span>
+                        <span class="badge badge-info badge-sm" x-text="lastInvoicedDate ? formatDate(lastInvoicedDate) : 'Never'"></span>
+                    </div>
                 </div>
-                <div class="flex gap-1 items-end pb-0.5 flex-wrap">
-                    <template x-if="config.billing_start_date">
-                        <button class="btn btn-sm btn-primary btn-outline" @click="setBillingPeriod(0)">This Period</button>
-                    </template>
-                    <template x-if="config.billing_start_date">
-                        <button class="btn btn-sm btn-primary btn-outline" @click="setBillingPeriod(1)">Last Period</button>
-                    </template>
-                    <template x-if="config.billing_start_date">
-                        <button class="btn btn-sm btn-outline" @click="setBillingPeriod(2)" x-text="billingPeriodLabel(2)"></button>
-                    </template>
-                    <template x-if="config.billing_start_date">
-                        <button class="btn btn-sm btn-outline" @click="setBillingPeriod(3)" x-text="billingPeriodLabel(3)"></button>
-                    </template>
-                    <template x-if="!config.billing_start_date">
-                        <button class="btn btn-sm btn-outline" @click="setThisMonth()">This Month</button>
-                    </template>
-                    <template x-if="!config.billing_start_date">
-                        <button class="btn btn-sm btn-outline" @click="setLastMonth()">Last Month</button>
-                    </template>
-                    <template x-if="!config.billing_start_date">
-                        <button class="btn btn-sm btn-outline" @click="setMonthsAgo(2)" x-text="monthLabel(2)"></button>
-                    </template>
-                    <template x-if="!config.billing_start_date">
-                        <button class="btn btn-sm btn-outline" @click="setMonthsAgo(3)" x-text="monthLabel(3)"></button>
-                    </template>
-                </div>
-                <div class="flex items-end pb-1 ml-2">
-                    <span class="text-xs text-base-content/60 mr-1">Last invoiced:</span>
-                    <span class="badge badge-info badge-sm" x-text="lastInvoicedDate ? formatDate(lastInvoicedDate) : 'Never'"></span>
-                </div>
-            </div>
+            </template>
         </div>
     </div>
 
@@ -109,8 +101,10 @@
                     <input type="number" step="0.0001" class="input input-bordered input-sm" x-model.number="config.usd_to_aud_rate" />
                 </div>
                 <div class="form-control">
-                    <label class="label label-text text-xs">Billing Start Date</label>
-                    <input type="date" class="input input-bordered input-sm" x-model="config.billing_start_date" />
+                    <label class="label label-text text-xs">Billing Cycle Day
+                        <span class="text-base-content/50 font-normal">(day of month billing period starts, 1–28)</span>
+                    </label>
+                    <input type="number" min="1" max="28" class="input input-bordered input-sm" x-model.number="config.billing_cycle_day" placeholder="e.g. 1 or 16" @change="selectedPeriodKey = ''; selectedPeriod = null;" />
                 </div>
                 <div class="form-control">
                     <label class="label label-text text-xs">Invoice Prefix</label>
@@ -129,11 +123,12 @@
     <!-- Preview Section -->
     <div x-show="selectedTenantId" x-cloak>
         <div class="flex items-center gap-3 mb-4">
-            <button class="btn btn-primary" @click="preview()" :disabled="previewing">
+            <button class="btn btn-primary" @click="preview()" :disabled="previewing || !selectedPeriod">
                 <span x-show="previewing" class="loading loading-spinner loading-sm"></span>
                 <span x-show="!previewing">Preview Invoice</span>
                 <span x-show="previewing">Loading...</span>
             </button>
+            <span x-show="!selectedPeriod && config.billing_cycle_day" class="text-sm text-base-content/50">Select a billing period above</span>
         </div>
 
         <!-- Preview Results -->
@@ -238,7 +233,7 @@
                                 </tbody>
                             </table>
                             <div x-show="previewData.calls.length === 0" class="text-center py-4 text-base-content/50">
-                                No calls found for this period.
+                                No billable calls found for this period.
                             </div>
                         </div>
                     </div>
@@ -293,7 +288,7 @@
                                     <td class="font-mono text-sm" x-text="inv.invoice_number"></td>
                                     <td>
                                         <span x-text="formatDate(inv.period_start)"></span>
-                                        <span class="text-base-content/40 mx-1">-</span>
+                                        <span class="text-base-content/40 mx-1">–</span>
                                         <span x-text="formatDate(inv.period_end)"></span>
                                     </td>
                                     <td class="text-right" x-text="inv.total_calls"></td>
@@ -346,15 +341,13 @@
 <script>
 function billingDashboard() {
     return {
-        // Auth
         currentUser: null,
-        userRole: '',
-
-        // Tenants
         availableTenants: [],
         selectedTenantId: '',
 
-        // Date range
+        // Period selection
+        selectedPeriodKey: '',
+        selectedPeriod: null,
         startDate: '',
         endDate: '',
 
@@ -366,47 +359,33 @@ function billingDashboard() {
             cost_per_call_voice_notes: 1.00,
             cost_per_call_site_updates: 2.00,
             usd_to_aud_rate: 1.5500,
-            billing_start_date: '',
+            billing_cycle_day: null,
             invoice_prefix: 'INV'
         },
         configSaving: false,
 
-        // Preview
         previewData: null,
         previewing: false,
-
-        // Invoices
         invoices: [],
         invoicesLoading: false,
         lastInvoicedDate: null,
-
-        // Generate
         generating: false,
-
-        // Toast
         toast: { show: false, message: '', type: 'success' },
 
         async init() {
-            // Get current user
             const resp = await fetch('/admin/auth/me');
             if (resp.ok) {
                 const data = await resp.json();
                 this.currentUser = data.user;
-                this.userRole = data.user.role;
             }
-
-            // Load tenants
             const tResp = await fetch('/admin/tenants/data');
             if (tResp.ok) {
                 const tData = await tResp.json();
                 this.availableTenants = tData.tenants || [];
             }
-
-            // Default date range to current month (billing period set after tenant selected)
-            this.setThisMonth();
         },
 
-        // Format a Date as YYYY-MM-DD in local time (avoids UTC timezone shift)
+        // Format a Date as YYYY-MM-DD in local time (no UTC shift)
         localDateStr(d) {
             const y = d.getFullYear();
             const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -414,79 +393,88 @@ function billingDashboard() {
             return `${y}-${m}-${day}`;
         },
 
-        setThisMonth() {
+        // Build the list of billing periods (last 12) from billing_cycle_day
+        get billingPeriods() {
+            const cycleDay = parseInt(this.config.billing_cycle_day);
+            if (!cycleDay) return [];
+
+            const invoicedStarts = new Set(this.invoices.map(inv => inv.period_start));
             const now = new Date();
-            this.startDate = this.localDateStr(new Date(now.getFullYear(), now.getMonth(), 1));
-            this.endDate = this.localDateStr(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+            const periods = [];
+
+            for (let i = 0; i < 12; i++) {
+                let y = now.getFullYear();
+                let m = now.getMonth(); // 0-based
+
+                // If today is before cycleDay, current period started last month
+                if (now.getDate() < cycleDay) m -= 1;
+
+                m -= i;
+                while (m < 0) { m += 12; y -= 1; }
+
+                const periodStart = new Date(y, m, cycleDay);
+                let endY = y, endM = m + 1;
+                if (endM > 11) { endM = 0; endY += 1; }
+                // Period end = day before next cycle day
+                const periodEnd = new Date(endY, endM, cycleDay - 1);
+
+                const startStr = this.localDateStr(periodStart);
+                const endStr = this.localDateStr(periodEnd);
+                const isCompleted = periodEnd < now;
+                const isInvoiced = invoicedStarts.has(startStr);
+
+                const monthName = periodStart.toLocaleString('en-AU', { month: 'long', year: 'numeric' });
+                const startLabel = periodStart.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+                const endLabel = periodEnd.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
+                const dateRange = `${startLabel} – ${endLabel}`;
+
+                let suffix = '';
+                if (isInvoiced) suffix = ' ✓';
+                else if (!isCompleted) suffix = ' (in progress)';
+
+                periods.push({
+                    key: startStr,
+                    label: monthName,
+                    optionLabel: `${monthName}  ${dateRange}${suffix}`,
+                    dateRange,
+                    start: startStr,
+                    end: endStr,
+                    isCompleted,
+                    isInvoiced
+                });
+            }
+
+            return periods;
         },
 
-        setLastMonth() {
-            const now = new Date();
-            this.startDate = this.localDateStr(new Date(now.getFullYear(), now.getMonth() - 1, 1));
-            this.endDate = this.localDateStr(new Date(now.getFullYear(), now.getMonth(), 0));
+        onPeriodChange() {
+            const period = this.billingPeriods.find(p => p.key === this.selectedPeriodKey);
+            this.selectedPeriod = period || null;
+            if (period) {
+                this.startDate = period.start;
+                this.endDate = period.end;
+                this.previewData = null;
+            }
         },
 
-        setMonthsAgo(n) {
-            const now = new Date();
-            this.startDate = this.localDateStr(new Date(now.getFullYear(), now.getMonth() - n, 1));
-            this.endDate = this.localDateStr(new Date(now.getFullYear(), now.getMonth() - n + 1, 0));
-        },
-
-        monthLabel(n) {
-            const now = new Date();
-            return new Date(now.getFullYear(), now.getMonth() - n, 1).toLocaleString('en-AU', { month: 'short', year: 'numeric' });
-        },
-
-        // Calculate billing period start/end using billing_start_date day
-        // periodsAgo=0 → current period, 1 → last period, etc.
-        setBillingPeriod(periodsAgo) {
-            const startDay = new Date(this.config.billing_start_date + 'T00:00:00').getDate();
-            const now = new Date();
-            let y = now.getFullYear();
-            let m = now.getMonth(); // 0-based
-
-            // If today is before the start day, the current period began last month
-            if (now.getDate() < startDay) m -= 1;
-
-            // Go back by periodsAgo
-            m -= periodsAgo;
-            while (m < 0) { m += 12; y -= 1; }
-
-            const periodStart = new Date(y, m, startDay);
-            // Period end = day before the next period start
-            let ny = y, nm = m + 1;
-            if (nm > 11) { nm = 0; ny += 1; }
-            const periodEnd = new Date(ny, nm, startDay - 1);
-
-            this.startDate = this.localDateStr(periodStart);
-            this.endDate = this.localDateStr(periodEnd);
-        },
-
-        billingPeriodLabel(periodsAgo) {
-            const startDay = new Date(this.config.billing_start_date + 'T00:00:00').getDate();
-            const now = new Date();
-            let y = now.getFullYear();
-            let m = now.getMonth();
-            if (now.getDate() < startDay) m -= 1;
-            m -= periodsAgo;
-            while (m < 0) { m += 12; y -= 1; }
-            const periodStart = new Date(y, m, startDay);
-            return periodStart.toLocaleString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
+        // Auto-select the most recent completed, uninvoiced period
+        autoSelectPeriod() {
+            const periods = this.billingPeriods;
+            const best = periods.find(p => p.isCompleted && !p.isInvoiced);
+            const toSelect = best || (periods.length ? periods[0] : null);
+            if (toSelect) {
+                this.selectedPeriodKey = toSelect.key;
+                this.onPeriodChange();
+            }
         },
 
         async onTenantChange() {
             if (!this.selectedTenantId) return;
             this.previewData = null;
+            this.selectedPeriodKey = '';
+            this.selectedPeriod = null;
             await Promise.all([this.loadConfig(), this.loadInvoices()]);
-            // Auto-set date range: if billing start date configured, use last completed period
-            // (if today IS the start day, current period just started so default to last period)
-            if (this.config.billing_start_date) {
-                const startDay = new Date(this.config.billing_start_date + 'T00:00:00').getDate();
-                const todayDay = new Date().getDate();
-                this.setBillingPeriod(todayDay === startDay ? 1 : 0);
-            } else {
-                this.setThisMonth();
-            }
+            this.autoSelectPeriod();
         },
 
         async loadConfig() {
@@ -510,6 +498,8 @@ function billingDashboard() {
                 const data = await resp.json();
                 if (data.success) {
                     this.showToast('Config saved', 'success');
+                    // Refresh period list after cycle day change
+                    this.autoSelectPeriod();
                 } else {
                     this.showToast('Error: ' + (data.error || 'Unknown'), 'error');
                 }
@@ -519,7 +509,7 @@ function billingDashboard() {
         },
 
         async preview() {
-            if (!this.selectedTenantId) return this.showToast('Select a tenant first', 'error');
+            if (!this.selectedPeriod) return this.showToast('Select a billing period first', 'error');
             this.previewing = true;
             this.previewData = null;
             try {
@@ -558,6 +548,8 @@ function billingDashboard() {
                     this.showToast(`Invoice ${data.invoice.invoice_number} generated`, 'success');
                     this.previewData = null;
                     await this.loadInvoices();
+                    // Mark the period as invoiced by refreshing
+                    this.onPeriodChange();
                 } else {
                     this.showToast('Error: ' + (data.error || 'Unknown'), 'error');
                 }
@@ -574,7 +566,6 @@ function billingDashboard() {
                 const data = await resp.json();
                 if (data.success) {
                     this.invoices = data.invoices || [];
-                    // Set last invoiced date from most recent invoice
                     this.lastInvoicedDate = this.invoices.length > 0 ? this.invoices[0].period_end : null;
                 }
             } finally {
@@ -625,7 +616,7 @@ function billingDashboard() {
 
         formatDate(dateStr) {
             if (!dateStr) return '-';
-            const d = new Date(dateStr);
+            const d = new Date(dateStr + 'T00:00:00');
             return d.toLocaleDateString('en-AU', { day: '2-digit', month: '2-digit', year: 'numeric' });
         },
 
