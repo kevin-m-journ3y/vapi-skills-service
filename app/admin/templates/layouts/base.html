@@ -183,7 +183,8 @@
                             <li x-show="enabledReports.includes('qr_signons')" x-cloak><a href="/admin/qr-signons" class="{% if 'qr-signons' in request.url.path %}active{% endif %}">QR Sign-Ons</a></li>
                             <li x-show="enabledReports.includes('timesheets')" x-cloak><a href="/admin/reports/timesheets" class="{% if request.url.path == '/admin/reports/timesheets' %}active{% endif %}">Timesheets</a></li>
                             <li x-show="enabledReports.includes('payroll_weekly')" x-cloak><a href="/admin/reports/payroll" class="{% if 'payroll' in request.url.path %}active{% endif %}">Payroll</a></li>
-                            <li x-show="enabledReports.includes('site_weekly')" x-cloak><a href="/admin/reports/site-weekly" class="{% if 'site-weekly' in request.url.path %}active{% endif %}">Site Weekly</a></li>
+                            <li x-show="enabledReports.includes('site_weekly')" x-cloak><a href="/admin/reports/site-weekly" class="{% if request.url.path == '/admin/reports/site-weekly' %}active{% endif %}">Site Weekly</a></li>
+                            <li x-show="enabledReports.includes('site_weekly')" x-cloak><a href="/admin/reports/site-weekly-ai" class="{% if 'site-weekly-ai' in request.url.path %}active{% endif %}">Site Weekly AI</a></li>
                             <li x-show="enabledReports.includes('site_progress')" x-cloak><a href="/admin/reports/site-progress" class="{% if 'site-progress' in request.url.path %}active{% endif %}">Site Progress</a></li>
                             <li x-show="enabledReports.includes('voice_notes')" x-cloak><a href="/admin/reports/voice-notes" class="{% if 'voice-notes' in request.url.path %}active{% endif %}">Voice Notes</a></li>
                             <li><a href="/admin/site-notes" class="{% if 'site-notes' in request.url.path %}active{% endif %}">Site Notes</a></li>
@@ -275,11 +276,28 @@
                     </select>
                 </div>
 
+                <!-- Note date -->
+                <div class="form-control mb-3">
+                    <label class="label"><span class="label-text">Date</span></label>
+                    <input type="date" class="input input-bordered input-sm" x-model="noteDate" />
+                </div>
+
                 <!-- Note text -->
                 <div class="form-control mb-3">
                     <label class="label"><span class="label-text">Note</span></label>
                     <textarea class="textarea textarea-bordered h-28" placeholder="Describe the observation, concern, issue, or update..."
                               x-model="noteText"></textarea>
+                </div>
+
+                <!-- Track as issue -->
+                <div class="form-control mb-4">
+                    <label class="cursor-pointer flex items-center gap-3">
+                        <input type="checkbox" class="checkbox checkbox-warning checkbox-sm" x-model="isIssue" />
+                        <div>
+                            <span class="label-text font-medium">Track as Issue</span>
+                            <p class="text-xs text-base-content/50">Issue will appear in the weekly report Risks section until marked resolved</p>
+                        </div>
+                    </label>
                 </div>
 
                 <!-- File attachments -->
@@ -336,6 +354,8 @@
             tenantId: '',
             siteId: '',
             noteText: '',
+            noteDate: new Date().toISOString().slice(0, 10),
+            isIssue: false,
             files: [],
             tenants: [],
             sites: [],
@@ -346,6 +366,8 @@
             async openModal() {
                 this.open = true;
                 this.noteText = '';
+                this.noteDate = new Date().toISOString().slice(0, 10);
+                this.isIssue = false;
                 this.files = [];
                 this.siteId = '';
 
@@ -413,6 +435,8 @@
                     formData.append('tenant_id', this.tenantId);
                     formData.append('site_id', this.siteId);
                     formData.append('note_text', this.noteText);
+                    formData.append('note_date', this.noteDate);
+                    formData.append('is_issue', this.isIssue ? 'true' : 'false');
                     for (const f of this.files) {
                         formData.append('files', f);
                     }
@@ -426,6 +450,7 @@
                     if (d.success) {
                         this.open = false;
                         this.showToast('Site note saved', 'success');
+                        window.dispatchEvent(new CustomEvent('site-note-saved'));
                     } else {
                         this.showToast(d.error || 'Failed to save note', 'error');
                     }

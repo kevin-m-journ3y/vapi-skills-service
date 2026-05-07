@@ -1,0 +1,957 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Site Weekly AI{% endblock %}
+
+{% block content %}
+<div x-data="siteWeeklyAi()" x-init="init()">
+
+    <!-- Toast -->
+    <div x-show="toast.show" x-transition class="toast toast-top toast-end z-50" x-cloak>
+        <div class="alert" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'">
+            <span x-text="toast.message"></span>
+        </div>
+    </div>
+
+    <!-- Regenerate Confirmation Modal -->
+    <div x-show="showRegenerateModal" x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div class="bg-base-100 rounded-2xl shadow-xl p-6 w-full max-w-md mx-4">
+            <h3 class="text-lg font-bold mb-2">Regenerate AI Draft?</h3>
+            <p class="text-base-content/70 text-sm mb-4">This will overwrite your current draft — including any manual edits — with a freshly generated version that includes the latest site notes and data.</p>
+            <div class="flex justify-end gap-3">
+                <button class="btn btn-ghost btn-sm" @click="showRegenerateModal = false">Cancel</button>
+                <button class="btn btn-warning btn-sm" @click="showRegenerateModal = false; generateDraft()">Yes, Regenerate</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Page Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold">Site Weekly AI</h1>
+            <p class="text-base-content/70 mt-1">AI-drafted weekly report — edit any section, then download as PDF</p>
+        </div>
+        <div class="flex gap-2">
+            <button class="btn btn-outline btn-sm gap-2"
+                    @click="showRegenerateModal = true"
+                    :disabled="!selectedSiteId || generating"
+                    x-show="draft && selectedSiteId"
+                    x-cloak>
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                Regenerate
+            </button>
+            <button class="btn btn-primary btn-sm gap-2"
+                    @click="downloadPDF()"
+                    :disabled="!draft || !selectedSiteId || downloadingPdf">
+                <span class="loading loading-spinner loading-xs" x-show="downloadingPdf"></span>
+                <svg x-show="!downloadingPdf" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                <span x-text="downloadingPdf ? 'Generating…' : 'Download PDF'"></span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Tenant Switcher (Super Admin Only) -->
+    <template x-if="currentUser?.role === 'super_admin'">
+        <div class="mb-4">
+            <select class="select select-bordered w-full max-w-xs" x-model="selectedTenantId" @change="onTenantChange()">
+                <option value="">Select Tenant</option>
+                <template x-for="tenant in availableTenants" :key="tenant.id">
+                    <option :value="tenant.id" x-text="tenant.name"></option>
+                </template>
+            </select>
+        </div>
+    </template>
+
+    <!-- Filters -->
+    <div class="card bg-base-100 shadow mb-4">
+        <div class="card-body py-3">
+            <div class="flex flex-wrap gap-3 items-center">
+                <div class="form-control">
+                    <label class="label label-text text-xs">Site</label>
+                    <select class="select select-bordered select-sm w-64" x-model="selectedSiteId" @change="loadDraft()">
+                        <option value="">Select a site...</option>
+                        <template x-for="site in availableSites" :key="site.id">
+                            <option :value="site.id" x-text="site.name"></option>
+                        </template>
+                    </select>
+                </div>
+                <div class="divider divider-horizontal h-8 self-end"></div>
+                <div class="flex items-center gap-2 self-end">
+                    <button class="btn btn-sm btn-ghost" @click="prevWeek()">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
+                    </button>
+                    <span class="font-semibold min-w-[180px] text-center" x-text="weekLabel"></span>
+                    <button class="btn btn-sm btn-ghost" @click="nextWeek()">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
+                    </button>
+                    <button class="btn btn-sm btn-outline" @click="goToThisWeek()">This Week</button>
+                    <button class="btn btn-sm btn-outline" @click="goToLastWeek()">Last Week</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- No Site Selected -->
+    <div x-show="!selectedSiteId" x-cloak class="alert alert-info">Please select a site to generate the weekly report.</div>
+
+    <!-- New Data Available Banner -->
+    <template x-if="selectedSiteId && draft && hasNewData">
+        <div class="alert alert-warning mb-4 py-2 flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                <span class="text-sm">New notes or data added since this report was last generated.</span>
+            </div>
+            <button class="btn btn-xs btn-warning" @click="showRegenerateModal = true">Regenerate to include</button>
+        </div>
+    </template>
+
+    <!-- No Report Yet CTA -->
+    <div x-show="selectedSiteId && !generating && !loading && noReport" x-cloak
+         class="flex flex-col items-center py-16 gap-4 text-center">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-14 w-14 text-base-content/20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+        <div>
+            <p class="text-lg font-semibold text-base-content/60">No report generated yet for this week</p>
+            <p class="text-sm text-base-content/40 mt-1">
+                <span x-text="rawData?.summary?.total_hours ? `${rawData.summary.total_hours}h logged across ${rawData.summary.total_workers} worker(s)` : 'Accumulate data throughout the week'"></span>
+                <template x-if="rawData?.summary?.total_notes > 0">
+                    <span x-text="` · ${rawData.summary.total_notes} site note(s)`"></span>
+                </template>
+            </p>
+        </div>
+        <button class="btn btn-primary btn-lg gap-2" @click="generateDraft()">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+            Generate AI Report
+        </button>
+        <p class="text-xs text-base-content/30">Takes ~10 seconds · includes all site notes & timesheet data</p>
+    </div>
+
+    <!-- Loading saved report -->
+    <div x-show="selectedSiteId && loading && !generating" class="flex flex-col items-center py-16 gap-4" x-cloak>
+        <span class="loading loading-spinner loading-lg text-primary"></span>
+        <p class="text-base-content/60">Loading report…</p>
+    </div>
+
+    <!-- Generating new AI draft -->
+    <div x-show="selectedSiteId && generating" class="flex flex-col items-center py-16 gap-4" x-cloak>
+        <span class="loading loading-spinner loading-lg text-primary"></span>
+        <p class="text-base-content/60">Generating AI draft… this takes about 10 seconds</p>
+    </div>
+
+    <!-- Report Content -->
+    <div x-show="selectedSiteId && !generating && !loading && draft" x-cloak class="space-y-6">
+
+        <!-- Saved indicator -->
+        <div x-show="lastSaved" class="text-xs text-base-content/40 text-right -mb-4" x-cloak>
+            Last saved <span x-text="lastSaved"></span>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div class="stat bg-base-100 shadow rounded-lg p-4">
+                <div class="stat-title text-xs">Total Hours</div>
+                <div class="stat-value text-2xl" x-text="rawData?.summary?.total_hours || 0"></div>
+            </div>
+            <div class="stat bg-base-100 shadow rounded-lg p-4">
+                <div class="stat-title text-xs">Workers on Site</div>
+                <div class="stat-value text-2xl" x-text="rawData?.summary?.total_workers || 0"></div>
+            </div>
+            <div class="stat bg-base-100 shadow rounded-lg p-4">
+                <div class="stat-title text-xs">Site Updates Logged</div>
+                <div class="stat-value text-2xl" x-text="rawData?.summary?.total_updates || 0"></div>
+            </div>
+            <div class="stat bg-base-100 shadow rounded-lg p-4">
+                <div class="stat-title text-xs">Site Notes</div>
+                <div class="stat-value text-2xl" x-text="rawData?.summary?.total_notes || 0"></div>
+            </div>
+        </div>
+
+        <!-- Weather Strip -->
+        <template x-if="rawData?.weather && Object.keys(rawData.weather).length > 1">
+            <div class="card bg-base-100 shadow">
+                <div class="card-body py-3">
+                    <div class="flex justify-between items-baseline mb-2">
+                        <h2 class="card-title text-lg">Weather</h2>
+                        <span class="text-[11px] text-base-content/40" x-show="weatherLocation()" x-text="'Based on ' + weatherLocation()"></span>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="table table-xs w-full">
+                            <thead>
+                                <tr>
+                                    <th class="w-12"></th>
+                                    <template x-for="d in workDays" :key="d.iso">
+                                        <th class="text-center text-xs" x-text="d.shortLabel"></th>
+                                    </template>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr class="bg-amber-50/50">
+                                    <td class="text-[10px] font-semibold text-base-content/50">AM<br/><span class="font-normal">6-11</span></td>
+                                    <template x-for="d in workDays" :key="d.iso">
+                                        <td class="text-center" :class="getHalfDayBg(d.iso, 'am')">
+                                            <div class="text-base" x-text="getHalfDayEmoji(d.iso, 'am')"></div>
+                                            <div class="text-[10px] text-base-content/50" x-text="getHalfDayDesc(d.iso, 'am')"></div>
+                                            <div class="text-xs font-semibold" x-text="getHalfDayTemp(d.iso, 'am')"></div>
+                                            <template x-if="getHalfDayRain(d.iso, 'am') > 0">
+                                                <div class="text-[10px] text-blue-500 font-medium" x-text="getHalfDayRain(d.iso, 'am') + 'mm'"></div>
+                                            </template>
+                                        </td>
+                                    </template>
+                                </tr>
+                                <tr class="bg-orange-50/50">
+                                    <td class="text-[10px] font-semibold text-base-content/50">PM<br/><span class="font-normal">11-5</span></td>
+                                    <template x-for="d in workDays" :key="d.iso">
+                                        <td class="text-center" :class="getHalfDayBg(d.iso, 'pm')">
+                                            <div class="text-base" x-text="getHalfDayEmoji(d.iso, 'pm')"></div>
+                                            <div class="text-[10px] text-base-content/50" x-text="getHalfDayDesc(d.iso, 'pm')"></div>
+                                            <div class="text-xs font-semibold" x-text="getHalfDayTemp(d.iso, 'pm')"></div>
+                                            <template x-if="getHalfDayRain(d.iso, 'pm') > 0">
+                                                <div class="text-[10px] text-blue-500 font-medium" x-text="getHalfDayRain(d.iso, 'pm') + 'mm'"></div>
+                                            </template>
+                                        </td>
+                                    </template>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- Hours Grid -->
+        <div class="card bg-base-100 shadow">
+            <div class="card-body">
+                <h2 class="card-title text-lg">Hours Summary</h2>
+                <template x-if="rawData?.grid?.length > 0">
+                    <div class="overflow-x-auto">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr class="bg-[#1B1464] text-white">
+                                    <th>Name</th>
+                                    <template x-for="d in workDays" :key="d.iso">
+                                        <th class="text-center" x-text="d.shortLabel"></th>
+                                    </template>
+                                    <th class="text-center">Total</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template x-for="person in rawData.grid" :key="person.user_id">
+                                    <tr>
+                                        <td class="font-semibold">
+                                            <span class="inline-flex items-center justify-center mr-1.5 px-1.5 py-0.5 text-[10px] font-bold bg-primary/10 text-primary rounded" x-text="getInitials(person.name)"></span>
+                                            <span x-text="person.name"></span>
+                                        </td>
+                                        <template x-for="d in workDays" :key="d.iso">
+                                            <td class="text-center" x-text="person.days[d.iso] ? person.days[d.iso].toFixed(1) : '-'"></td>
+                                        </template>
+                                        <td class="text-center font-bold bg-base-200" x-text="Object.values(person.days).reduce((a,b)=>a+b,0).toFixed(1)"></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                            <tfoot>
+                                <tr class="font-bold bg-base-200 border-t-2 border-[#1B1464]">
+                                    <td>TOTAL</td>
+                                    <template x-for="d in workDays" :key="d.iso">
+                                        <td class="text-center" x-text="getDayTotal(d.iso)"></td>
+                                    </template>
+                                    <td class="text-center bg-base-300" x-text="rawData?.summary?.total_hours"></td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </template>
+                <template x-if="!rawData?.grid || rawData.grid.length === 0">
+                    <p class="text-base-content/50 text-sm">No timesheet entries for this week.</p>
+                </template>
+            </div>
+        </div>
+
+        <!-- ─── WEEKLY SUMMARY ─────────────────────────────────────────── -->
+        <div class="card bg-base-100 shadow">
+            <div class="card-body">
+                <div class="flex justify-between items-center mb-3">
+                    <h2 class="card-title text-lg">Weekly Summary</h2>
+                    <button class="btn btn-xs btn-outline btn-primary gap-1" @click="enhanceSection('weekly_summary', null)" :disabled="enhancing['weekly_summary']">
+                        <template x-if="!enhancing['weekly_summary']">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                        </template>
+                        <span class="loading loading-spinner loading-xs" x-show="enhancing['weekly_summary']"></span>
+                        AI Enhance
+                    </button>
+                </div>
+                <textarea
+                    class="textarea textarea-bordered w-full text-sm leading-relaxed resize-none"
+                    rows="4"
+                    placeholder="Weekly summary will appear here after generating the draft…"
+                    x-model="draft.weekly_summary"
+                    @blur="saveSection('weekly_summary', null, draft.weekly_summary)"
+                    @input="autoResize($event.target)"
+                    x-ref="summary_textarea"
+                ></textarea>
+            </div>
+        </div>
+
+        <!-- ─── KEY MILESTONES ─────────────────────────────────────────── -->
+        <div class="card bg-base-100 shadow">
+            <div class="card-body">
+                <div class="flex justify-between items-center mb-3">
+                    <h2 class="card-title text-lg">Key Milestones</h2>
+                    <button class="btn btn-xs btn-outline btn-primary gap-1" @click="enhanceSection('key_milestones', null)" :disabled="enhancing['key_milestones']">
+                        <template x-if="!enhancing['key_milestones']">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                        </template>
+                        <span class="loading loading-spinner loading-xs" x-show="enhancing['key_milestones']"></span>
+                        AI Enhance
+                    </button>
+                </div>
+                <p class="text-xs text-base-content/50 mb-2">One milestone per line</p>
+                <textarea
+                    class="textarea textarea-bordered w-full text-sm font-mono leading-relaxed"
+                    rows="5"
+                    placeholder="One milestone per line&#10;LVL drilling commenced&#10;First-floor steel connections finalised"
+                    x-model="milestonesText"
+                    @blur="saveSection('key_milestones', null, milestonesText)"
+                    @input="autoResize($event.target)"
+                ></textarea>
+            </div>
+        </div>
+
+        <!-- ─── LOOKING AHEAD ──────────────────────────────────────────── -->
+        <div class="card bg-base-100 shadow">
+            <div class="card-body">
+                <div class="flex justify-between items-center mb-3">
+                    <div>
+                        <h2 class="card-title text-lg">Looking Ahead</h2>
+                        <p class="text-xs text-base-content/40 mt-0.5">Protected from regeneration — your edits here are always preserved</p>
+                    </div>
+                    <button class="btn btn-xs btn-outline btn-primary gap-1" @click="enhanceSection('looking_ahead', null)" :disabled="enhancing['looking_ahead'] || !lookingAheadText.trim()">
+                        <template x-if="!enhancing['looking_ahead']">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                        </template>
+                        <span class="loading loading-spinner loading-xs" x-show="enhancing['looking_ahead']"></span>
+                        AI Enhance
+                    </button>
+                </div>
+                <textarea
+                    class="textarea textarea-bordered w-full text-sm leading-relaxed"
+                    rows="4"
+                    placeholder="Describe upcoming activities for this site — e.g. concrete pour scheduled for Monday, engineer sign-off on framing, windows arriving end of week…"
+                    x-model="lookingAheadText"
+                    @blur="saveSection('looking_ahead', null, lookingAheadText)"
+                    @input="autoResize($event.target)"
+                ></textarea>
+            </div>
+        </div>
+
+        <!-- ─── DAY-BY-DAY ─────────────────────────────────────────────── -->
+        <div>
+            <h2 class="text-xl font-bold mb-3">Day-by-Day</h2>
+            <div class="space-y-3">
+                <template x-for="day in workDays" :key="day.iso">
+                    <div class="card bg-base-100 shadow">
+                        <!-- Day header — click to expand/collapse -->
+                        <div class="card-body py-0">
+                            <div
+                                class="flex items-center justify-between py-3 cursor-pointer select-none"
+                                @click="toggleDay(day.iso)"
+                            >
+                                <div class="flex items-center gap-3">
+                                    <!-- Collapse chevron -->
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-base-content/40 transition-transform duration-200"
+                                         :class="expandedDays[day.iso] ? 'rotate-180' : ''"
+                                         fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                                    </svg>
+                                    <!-- Day name + date -->
+                                    <div>
+                                        <span class="font-bold text-base" x-text="day.fullLabel"></span>
+                                        <span class="text-base-content/50 text-sm ml-2" x-text="day.iso"></span>
+                                    </div>
+                                </div>
+                                <!-- Weather badge for that day -->
+                                <div class="flex items-center gap-2 text-sm">
+                                    <span x-text="getDayWeatherEmoji(day.iso)" class="text-xl"></span>
+                                    <span class="text-base-content/60" x-text="getDayWeatherDesc(day.iso)"></span>
+                                    <span class="text-base-content/50 text-xs" x-text="getDayWeatherTemp(day.iso)"></span>
+                                </div>
+                            </div>
+
+                            <!-- Expanded content -->
+                            <div x-show="expandedDays[day.iso]" x-collapse class="pb-4 space-y-4">
+                                <div class="divider my-0"></div>
+
+                                <!-- BBMK WORKS -->
+                                <div>
+                                    <div class="flex justify-between items-center mb-1.5">
+                                        <h3 class="text-xs font-bold uppercase tracking-widest text-[#1B1464]">BBMK Works</h3>
+                                        <button class="btn btn-xs btn-outline btn-primary gap-1"
+                                                @click.stop="enhanceSection('bbmk_works', day.iso)"
+                                                :disabled="enhancing['bbmk_works_' + day.iso]">
+                                            <svg x-show="!enhancing['bbmk_works_' + day.iso]" xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                                            <span class="loading loading-spinner loading-xs" x-show="enhancing['bbmk_works_' + day.iso]"></span>
+                                            AI Enhance
+                                        </button>
+                                    </div>
+                                    <textarea
+                                        class="textarea textarea-bordered w-full text-sm font-mono leading-relaxed"
+                                        rows="3"
+                                        placeholder="One activity per line…"
+                                        x-model="daySections[day.iso + '_bbmk_works']"
+                                        @blur="saveDaySection('bbmk_works', day.iso)"
+                                        @input="autoResize($event.target)"
+                                    ></textarea>
+                                </div>
+
+                                <!-- TRADES -->
+                                <div>
+                                    <div class="flex justify-between items-center mb-1.5">
+                                        <h3 class="text-xs font-bold uppercase tracking-widest text-[#1B1464]">Trades</h3>
+                                        <button class="btn btn-xs btn-outline btn-primary gap-1"
+                                                @click.stop="enhanceSection('trades', day.iso)"
+                                                :disabled="enhancing['trades_' + day.iso]">
+                                            <svg x-show="!enhancing['trades_' + day.iso]" xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                                            <span class="loading loading-spinner loading-xs" x-show="enhancing['trades_' + day.iso]"></span>
+                                            AI Enhance
+                                        </button>
+                                    </div>
+                                    <textarea
+                                        class="textarea textarea-bordered w-full text-sm font-mono leading-relaxed"
+                                        rows="3"
+                                        placeholder="Trade name: description of work…"
+                                        x-model="daySections[day.iso + '_trades']"
+                                        @blur="saveDaySection('trades', day.iso)"
+                                        @input="autoResize($event.target)"
+                                    ></textarea>
+                                </div>
+
+                                <!-- ADMINISTRATION -->
+                                <div>
+                                    <div class="flex justify-between items-center mb-1.5">
+                                        <h3 class="text-xs font-bold uppercase tracking-widest text-[#1B1464]">Administration</h3>
+                                        <button class="btn btn-xs btn-outline btn-primary gap-1"
+                                                @click.stop="enhanceSection('administration', day.iso)"
+                                                :disabled="enhancing['administration_' + day.iso]">
+                                            <svg x-show="!enhancing['administration_' + day.iso]" xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                                            <span class="loading loading-spinner loading-xs" x-show="enhancing['administration_' + day.iso]"></span>
+                                            AI Enhance
+                                        </button>
+                                    </div>
+                                    <textarea
+                                        class="textarea textarea-bordered w-full text-sm font-mono leading-relaxed"
+                                        rows="3"
+                                        placeholder="One admin task per line…"
+                                        x-model="daySections[day.iso + '_administration']"
+                                        @blur="saveDaySection('administration', day.iso)"
+                                        @input="autoResize($event.target)"
+                                    ></textarea>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        <!-- ─── RISKS & ISSUES ─────────────────────────────────────────── -->
+        <div class="card bg-base-100 shadow" :class="risksText.trim() ? 'border-l-4 border-error' : ''">
+            <div class="card-body">
+                <div class="flex justify-between items-center mb-3">
+                    <h2 class="card-title text-lg">Risks, Issues & Escalations</h2>
+                    <button class="btn btn-xs btn-outline btn-primary gap-1" @click="enhanceSection('risks', null)" :disabled="enhancing['risks']">
+                        <template x-if="!enhancing['risks']">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                        </template>
+                        <span class="loading loading-spinner loading-xs" x-show="enhancing['risks']"></span>
+                        AI Enhance
+                    </button>
+                </div>
+                <p class="text-xs text-base-content/50 mb-2">One risk or issue per line</p>
+                <textarea
+                    class="textarea textarea-bordered w-full text-sm font-mono leading-relaxed"
+                    rows="4"
+                    placeholder="One risk or issue per line…"
+                    x-model="risksText"
+                    @blur="saveSection('risks', null, risksText)"
+                    @input="autoResize($event.target)"
+                ></textarea>
+            </div>
+        </div>
+
+        <!-- ─── PLANS & FOLLOW-UPS ─────────────────────────────────────── -->
+        <div class="card bg-base-100 shadow">
+            <div class="card-body">
+                <div class="flex justify-between items-center mb-3">
+                    <h2 class="card-title text-lg">Plans & Follow-ups</h2>
+                    <button class="btn btn-xs btn-outline btn-primary gap-1" @click="enhanceSection('plans', null)" :disabled="enhancing['plans']">
+                        <template x-if="!enhancing['plans']">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                        </template>
+                        <span class="loading loading-spinner loading-xs" x-show="enhancing['plans']"></span>
+                        AI Enhance
+                    </button>
+                </div>
+                <p class="text-xs text-base-content/50 mb-2">One action per line</p>
+                <textarea
+                    class="textarea textarea-bordered w-full text-sm font-mono leading-relaxed"
+                    rows="4"
+                    placeholder="One follow-up action per line…"
+                    x-model="plansText"
+                    @blur="saveSection('plans', null, plansText)"
+                    @input="autoResize($event.target)"
+                ></textarea>
+            </div>
+        </div>
+
+    </div><!-- end report content -->
+</div>
+
+{% block extra_head %}
+<style>
+textarea { min-height: 4rem; }
+</style>
+{% endblock %}
+
+<script>
+function siteWeeklyAi() {
+    return {
+        currentUser: null,
+        availableTenants: [],
+        availableSites: [],
+        selectedTenantId: '',
+        selectedSiteId: '',
+        generating: false,
+        loading: false,
+        noReport: false,
+        hasNewData: false,
+        generatedAt: null,
+        showRegenerateModal: false,
+        downloadingPdf: false,
+        rawData: null,
+        draft: null,
+        toast: { show: false, message: '', type: 'success' },
+        lastSaved: '',
+        enhancing: {},
+        expandedDays: {},
+
+        weekOffset: 0,
+        weekStart: null,
+        weekEnd: null,
+        weekLabel: '',
+        workDays: [],
+
+        // Flat reactive text models — all sections bound via x-model
+        milestonesText: '',
+        risksText: '',
+        plansText: '',
+        lookingAheadText: '',
+        daySections: {},  // keyed "iso_section" e.g. "2026-04-28_bbmk_works"
+
+        // ── init ────────────────────────────────────────────────────────
+        async init() {
+            try {
+                const resp = await fetch('/admin/auth/me');
+                if (resp.ok) {
+                    const d = await resp.json();
+                    this.currentUser = d.user;
+                    if (this.currentUser?.tenant_id) {
+                        this.selectedTenantId = this.currentUser.tenant_id;
+                    }
+                }
+            } catch (e) {}
+
+            if (this.currentUser?.role === 'super_admin') {
+                await this.loadTenants();
+            }
+            this.setWeek(0);
+            if (this.selectedTenantId) await this.loadSites();
+        },
+
+        async loadTenants() {
+            try {
+                const resp = await fetch('/admin/tenants/data');
+                if (resp.ok) {
+                    const d = await resp.json();
+                    if (d.success) this.availableTenants = d.tenants || [];
+                }
+            } catch (e) {}
+        },
+
+        async loadSites() {
+            if (!this.selectedTenantId) return;
+            try {
+                let url = '/admin/sites/data';
+                if (this.currentUser?.role === 'super_admin') url += `?tenant_id=${this.selectedTenantId}`;
+                const resp = await fetch(url);
+                if (resp.ok) {
+                    const d = await resp.json();
+                    if (d.success) this.availableSites = d.sites || [];
+                }
+            } catch (e) {}
+        },
+
+        setWeek(offset) {
+            this.weekOffset = offset;
+            const today = new Date();
+            const dayOfWeek = today.getDay();
+            const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+            const monday = new Date(today);
+            monday.setDate(today.getDate() + mondayOffset + (offset * 7));
+            const friday = new Date(monday); friday.setDate(monday.getDate() + 4);
+            const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
+
+            this.weekStart = this.toISO(monday);
+            this.weekEnd = this.toISO(sunday);
+
+            const opts = { day: 'numeric', month: 'short' };
+            this.weekLabel = `${monday.toLocaleDateString('en-AU', opts)} – ${friday.toLocaleDateString('en-AU', { ...opts, year: 'numeric' })}`;
+
+            this.workDays = [];
+            for (let i = 0; i < 5; i++) {
+                const d = new Date(monday); d.setDate(monday.getDate() + i);
+                const iso = this.toISO(d);
+                this.workDays.push({
+                    iso,
+                    shortLabel: d.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric' }),
+                    fullLabel: d.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }),
+                });
+                if (this.expandedDays[iso] === undefined) this.expandedDays[iso] = true;
+                // Pre-initialise enhancing keys so Alpine tracks them as reactive from the start
+                for (const s of ['bbmk_works', 'trades', 'administration']) {
+                    if (this.enhancing[`${s}_${iso}`] === undefined) this.enhancing[`${s}_${iso}`] = false;
+                }
+            }
+
+            if (this.selectedSiteId) this.loadDraft();
+        },
+
+        toISO(d) {
+            return d.getFullYear() + '-' +
+                String(d.getMonth() + 1).padStart(2, '0') + '-' +
+                String(d.getDate()).padStart(2, '0');
+        },
+
+        prevWeek() { this.setWeek(this.weekOffset - 1); },
+        nextWeek() { this.setWeek(this.weekOffset + 1); },
+        goToThisWeek() { this.setWeek(0); },
+        goToLastWeek() { this.setWeek(-1); },
+
+        async onTenantChange() {
+            this.selectedSiteId = '';
+            this.draft = null;
+            this.rawData = null;
+            this.noReport = false;
+            this.hasNewData = false;
+            this.loading = false;
+            await this.loadSites();
+        },
+
+        toggleDay(iso) {
+            this.expandedDays[iso] = !this.expandedDays[iso];
+        },
+
+        // ── load draft (check-only — never auto-generates) ──────────────
+        async loadDraft() {
+            if (!this.selectedTenantId || !this.selectedSiteId) return;
+            this.loading = true;
+            this.draft = null;
+            this.rawData = null;
+            this.noReport = false;
+            this.hasNewData = false;
+
+            try {
+                let url = `/admin/reports/site-weekly-ai/draft?site_id=${this.selectedSiteId}&start_date=${this.weekStart}&end_date=${this.weekEnd}`;
+                if (this.currentUser?.role === 'super_admin') url += `&tenant_id=${this.selectedTenantId}`;
+
+                const resp = await fetch(url);
+                const d = await resp.json();
+
+                if (d.success) {
+                    this.rawData = { grid: d.grid, weather: d.weather, summary: d.summary };
+                    this.hasNewData = d.has_new_data || false;
+                    this.generatedAt = d.generated_at || null;
+                    if (d.has_draft) {
+                        this.draft = d.draft;
+                        this.syncTextModels();
+                        if (d.is_saved) {
+                            this.lastSaved = 'previously saved';
+                        }
+                    } else {
+                        this.noReport = true;
+                    }
+                } else {
+                    this.showToast(d.error || 'Failed to load report', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error loading report', 'error');
+            }
+            this.loading = false;
+        },
+
+        // ── generate draft (explicit user action) ──────────────────────
+        async generateDraft() {
+            if (!this.selectedTenantId || !this.selectedSiteId) return;
+            this.generating = true;
+            this.noReport = false;
+
+            try {
+                let url = `/admin/reports/site-weekly-ai/draft?site_id=${this.selectedSiteId}&start_date=${this.weekStart}&end_date=${this.weekEnd}&generate=true`;
+                if (this.currentUser?.role === 'super_admin') url += `&tenant_id=${this.selectedTenantId}`;
+
+                const resp = await fetch(url);
+                const d = await resp.json();
+
+                if (d.success && d.has_draft) {
+                    this.rawData = { grid: d.grid, weather: d.weather, summary: d.summary };
+                    this.draft = d.draft;
+                    this.hasNewData = false;
+                    this.generatedAt = d.generated_at || null;
+                    this.syncTextModels();
+                    this.lastSaved = 'just generated';
+                    this.showToast('Report generated', 'success');
+                } else {
+                    this.showToast(d.error || 'Failed to generate report', 'error');
+                    this.noReport = true;
+                }
+            } catch (e) {
+                this.showToast('Error generating report', 'error');
+                this.noReport = true;
+            }
+            this.generating = false;
+        },
+
+        // ── text model sync ─────────────────────────────────────────────
+        syncTextModels() {
+            if (!this.draft) return;
+            this.milestonesText = (this.draft.key_milestones || []).join('\n');
+            this.risksText = (this.draft.risks || []).join('\n');
+            this.plansText = (this.draft.plans || []).join('\n');
+            this.lookingAheadText = this.draft.looking_ahead || '';
+            // Populate flat daySections map so x-model works on day textareas
+            const ds = {};
+            for (const iso of this.workDays.map(d => d.iso)) {
+                const day = this.draft.days?.[iso] || {};
+                for (const s of ['bbmk_works', 'trades', 'administration']) {
+                    ds[`${iso}_${s}`] = (day[s] || []).join('\n');
+                }
+            }
+            this.daySections = ds;
+        },
+
+        // ── day section helpers ─────────────────────────────────────────
+        setDaySection(iso, key, value) {
+            // Keep daySections in sync (x-model handles the textarea → daySections direction,
+            // this keeps draft.days in sync for save/enhance reads)
+            if (!this.draft) return;
+            if (!this.draft.days) this.draft.days = {};
+            if (!this.draft.days[iso]) this.draft.days[iso] = { bbmk_works: [], trades: [], administration: [] };
+            this.draft.days[iso][key] = value.split('\n').filter(l => l.trim());
+        },
+
+        // ── save ────────────────────────────────────────────────────────
+        async saveSection(section, dayDate, value) {
+            if (!this.selectedSiteId || !this.draft) return;
+            try {
+                await fetch('/admin/reports/site-weekly-ai/save-section', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tenant_id: this.selectedTenantId,
+                        site_id: this.selectedSiteId,
+                        week_start: this.weekStart,
+                        week_end: this.weekEnd,
+                        section,
+                        day_date: dayDate,
+                        content: value,
+                    }),
+                });
+                this.lastSaved = new Date().toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' });
+            } catch (e) {
+                this.showToast('Failed to save', 'error');
+            }
+        },
+
+        saveDaySection(section, iso) {
+            const value = this.daySections[`${iso}_${section}`] || '';
+            this.setDaySection(iso, section, value);
+            this.saveSection(section, iso, value);
+        },
+
+        // ── AI Enhance ──────────────────────────────────────────────────
+        async enhanceSection(section, dayDate) {
+            const key = dayDate ? `${section}_${dayDate}` : section;
+            this.enhancing[key] = true;
+
+            let currentText = '';
+            if (section === 'weekly_summary') currentText = this.draft?.weekly_summary || '';
+            else if (section === 'key_milestones') currentText = this.milestonesText;
+            else if (section === 'risks') currentText = this.risksText;
+            else if (section === 'plans') currentText = this.plansText;
+            else if (dayDate) currentText = this.daySections[`${dayDate}_${section}`] || '';
+
+            if (!currentText.trim()) {
+                this.showToast('Nothing to enhance — add some content first', 'error');
+                this.enhancing[key] = false;
+                return;
+            }
+
+            const siteLabel = this.availableSites.find(s => s.id === this.selectedSiteId)?.name || '';
+            const context = dayDate
+                ? `${this.workDays.find(d => d.iso === dayDate)?.fullLabel || dayDate}, site: ${siteLabel}`
+                : `Week of ${this.weekLabel}, site: ${siteLabel}`;
+
+            try {
+                const resp = await fetch('/admin/reports/site-weekly-ai/enhance', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ section, content: currentText, context }),
+                });
+                const d = await resp.json();
+
+                if (d.success) {
+                    const enhanced = d.enhanced;
+                    // Apply to the right model
+                    if (section === 'weekly_summary') {
+                        this.draft.weekly_summary = enhanced;
+                        await this.saveSection('weekly_summary', null, enhanced);
+                    } else if (section === 'key_milestones') {
+                        this.milestonesText = enhanced;
+                        await this.saveSection('key_milestones', null, enhanced);
+                    } else if (section === 'risks') {
+                        this.risksText = enhanced;
+                        await this.saveSection('risks', null, enhanced);
+                    } else if (section === 'plans') {
+                        this.plansText = enhanced;
+                        await this.saveSection('plans', null, enhanced);
+                    } else if (dayDate) {
+                        this.daySections[`${dayDate}_${section}`] = enhanced;
+                        this.setDaySection(dayDate, section, enhanced);
+                        await this.saveSection(section, dayDate, enhanced);
+                    }
+                    this.showToast('Enhanced!', 'success');
+                } else {
+                    this.showToast(d.error || 'Enhance failed', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error enhancing section', 'error');
+            }
+            this.enhancing[key] = false;
+        },
+
+        // ── PDF download ─────────────────────────────────────────────────
+        async downloadPDF() {
+            this.downloadingPdf = true;
+            let url = `/admin/reports/site-weekly-ai/pdf?site_id=${this.selectedSiteId}&start_date=${this.weekStart}&end_date=${this.weekEnd}`;
+            if (this.currentUser?.role === 'super_admin') url += `&tenant_id=${this.selectedTenantId}`;
+            try {
+                const resp = await fetch(url);
+                if (resp.ok) {
+                    const blob = await resp.blob();
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `site_report_${this.weekStart}.pdf`;
+                    a.click();
+                    URL.revokeObjectURL(a.href);
+                    this.showToast('PDF downloaded', 'success');
+                } else {
+                    this.showToast('Failed to generate PDF', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error downloading PDF', 'error');
+            }
+            this.downloadingPdf = false;
+        },
+
+        // ── UI helpers ───────────────────────────────────────────────────
+        autoResize(el) {
+            el.style.height = 'auto';
+            el.style.height = el.scrollHeight + 'px';
+        },
+
+        getInitials(name) {
+            const parts = (name || '').trim().split(/\s+/);
+            if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+            return (parts[0]?.[0] || '?').toUpperCase();
+        },
+
+        getDayTotal(iso) {
+            if (!this.rawData?.grid) return '-';
+            let total = 0;
+            for (const p of this.rawData.grid) total += p.days[iso] || 0;
+            return total > 0 ? total.toFixed(1) : '-';
+        },
+
+        // ── weather helpers ──────────────────────────────────────────────
+        weatherLocation() {
+            return this.rawData?.weather?.['_meta']?.location || '';
+        },
+
+        isHalfDayComplete(iso, half) {
+            const today = new Date();
+            const todayIso = this.toISO(today);
+            if (iso < todayIso) return true;
+            if (iso > todayIso) return false;
+            const hour = today.getHours();
+            return half === 'am' ? hour >= 11 : hour >= 17;
+        },
+
+        _iconMap: {
+            'sun': '☀️', 'cloud-sun': '⛅', 'cloud': '☁️', 'fog': '🌫️',
+            'cloud-drizzle': '🌦️', 'cloud-rain': '🌧️', 'cloud-snow': '❄️', 'cloud-lightning': '⛈️',
+        },
+
+        getHalfDayEmoji(iso, half) {
+            if (!this.isHalfDayComplete(iso, half)) return '';
+            const w = this.rawData?.weather?.[iso];
+            return this._iconMap[w?.[half + '_weather_icon']] || (w ? '☁️' : '');
+        },
+
+        getHalfDayDesc(iso, half) {
+            if (!this.isHalfDayComplete(iso, half)) return '';
+            return this.rawData?.weather?.[iso]?.[half + '_weather_description'] || '';
+        },
+
+        getHalfDayTemp(iso, half) {
+            if (!this.isHalfDayComplete(iso, half)) return '';
+            const t = this.rawData?.weather?.[iso]?.[half + '_temp'];
+            return t != null ? Math.round(t) + '°' : '';
+        },
+
+        getHalfDayRain(iso, half) {
+            if (!this.isHalfDayComplete(iso, half)) return 0;
+            return this.rawData?.weather?.[iso]?.[half + '_precipitation_mm'] || 0;
+        },
+
+        getHalfDayBg(iso, half) {
+            const rain = this.getHalfDayRain(iso, half);
+            if (rain >= 5) return 'bg-blue-100';
+            if (rain > 0) return 'bg-blue-50';
+            return '';
+        },
+
+        getDayWeatherEmoji(iso) {
+            const w = this.rawData?.weather?.[iso];
+            if (!w) return '';
+            return this._iconMap[w.weather_icon] || this._iconMap[w.am_weather_icon] || '';
+        },
+
+        getDayWeatherDesc(iso) {
+            const w = this.rawData?.weather?.[iso];
+            return w?.weather_description || w?.am_weather_description || '';
+        },
+
+        getDayWeatherTemp(iso) {
+            const w = this.rawData?.weather?.[iso];
+            if (!w) return '';
+            if (w.temperature_max != null) return `${Math.round(w.temperature_max)}° / ${Math.round(w.temperature_min)}°`;
+            return '';
+        },
+
+        showToast(message, type = 'success') {
+            this.toast = { show: true, message, type };
+            setTimeout(() => this.toast.show = false, 3000);
+        },
+    };
+}
+</script>
+{% endblock %}

@@ -1139,3 +1139,337 @@ def generate_invoice_pdf(
     doc.build(elements, onFirstPage=_add_footer, onLaterPages=_add_footer)
     buffer.seek(0)
     return buffer.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Site Weekly AI Report PDF
+# ---------------------------------------------------------------------------
+
+# Maps weather_icon strings (from WMO_CODES in weather.py) to text symbols
+# ReportLab's standard fonts don't support emoji, so use ASCII-safe symbols.
+_WEATHER_ICON_SYMBOLS = {
+    "sun": "Sunny",
+    "cloud-sun": "Partly cloudy",
+    "cloud": "Cloudy",
+    "fog": "Fog",
+    "cloud-drizzle": "Drizzle",
+    "cloud-rain": "Rain",
+    "cloud-snow": "Snow",
+    "cloud-lightning": "Thunderstorm",
+}
+
+
+def _weather_symbol(icon_key: str) -> str:
+    return _WEATHER_ICON_SYMBOLS.get(icon_key, icon_key.replace("-", " ").title() if icon_key else "")
+
+
+def _weather_line(w: dict) -> str:
+    """Build a one-line weather summary from a weather.py result dict."""
+    if not w:
+        return ""
+    parts = []
+    desc = w.get("weather_description", "")
+    icon_key = w.get("weather_icon", "")
+    if desc:
+        parts.append(desc)
+    hi = w.get("temperature_max")
+    lo = w.get("temperature_min")
+    if hi is not None and lo is not None:
+        parts.append(f"{round(lo)}°–{round(hi)}°C")
+    elif hi is not None:
+        parts.append(f"{round(hi)}°C")
+    rain = w.get("precipitation_mm")
+    if rain is not None and float(rain) > 0:
+        parts.append(f"Rain: {rain}mm")
+    return "   |   ".join(parts)
+
+
+def _day_label(iso: str) -> str:
+    try:
+        d = date.fromisoformat(iso)
+        return d.strftime("%A, %-d %B %Y")
+    except Exception:
+        return iso
+
+
+def _section_bullet_items(items: list, style, doc_width: float) -> list:
+    """Return a list of flowables for a bulleted list of text items."""
+    elements = []
+    for item in items:
+        text = str(item).strip()
+        if text:
+            elements.append(Paragraph(f"• {text}", style))
+    return elements
+
+
+SECTION_BLUE = colors.HexColor("#1B3A6B")
+DAY_HEADER_BG = colors.HexColor("#1B1464")
+SUBSECTION_BG = colors.HexColor("#EEF2F8")
+WEATHER_BG = colors.HexColor("#F0F4FA")
+
+
+def _build_day_block(iso: str, day_data: dict, weather: dict, styles, doc_width: float) -> list:
+    """Build all flowables for one working day."""
+    elements = []
+
+    w = (weather or {}).get(iso, {})
+    weather_text = _weather_line(w)
+    day_label = _day_label(iso)
+
+    bbmk = [x for x in (day_data.get("bbmk_works") or []) if str(x).strip()]
+    trades = [x for x in (day_data.get("trades") or []) if str(x).strip()]
+    admin = [x for x in (day_data.get("administration") or []) if str(x).strip()]
+    has_any = bool(bbmk or trades or admin)
+
+    # Day header table: left=day label, right=weather
+    header_data = [[
+        Paragraph(f"<b>{day_label}</b>", ParagraphStyle(
+            "DayHead", fontName="Helvetica-Bold", fontSize=10,
+            leading=13, textColor=WHITE,
+        )),
+        Paragraph(weather_text, ParagraphStyle(
+            "WeatherRight", fontName="Helvetica", fontSize=8,
+            leading=11, textColor=WHITE, alignment=TA_RIGHT,
+        )),
+    ]]
+    header_table = Table(
+        header_data,
+        colWidths=[doc_width * 0.6, doc_width * 0.4],
+    )
+    header_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), DAY_HEADER_BG),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (0, -1), 8),
+        ("RIGHTPADDING", (-1, 0), (-1, -1), 8),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+
+    block_items = [header_table]
+
+    if not has_any:
+        block_items.append(Paragraph(
+            "<i>No activity recorded.</i>",
+            ParagraphStyle(
+                "NoActivity", fontName="Helvetica-Oblique", fontSize=9,
+                leading=12, textColor=DARK_GREY, leftIndent=8,
+                spaceBefore=4, spaceAfter=6,
+            )
+        ))
+    else:
+        body_style = ParagraphStyle(
+            "DayBody", fontName="Helvetica", fontSize=9,
+            leading=13, textColor=BLACK, leftIndent=16, spaceAfter=2,
+        )
+        sub_style = ParagraphStyle(
+            "SubLabel", fontName="Helvetica-Bold", fontSize=8,
+            leading=11, textColor=SECTION_BLUE, leftIndent=8,
+            spaceBefore=5, spaceAfter=2,
+        )
+
+        if bbmk:
+            block_items.append(Paragraph("BBMK WORKS", sub_style))
+            for item in bbmk:
+                text = str(item).strip()
+                if text:
+                    block_items.append(Paragraph(f"• {text}", body_style))
+
+        if trades:
+            block_items.append(Paragraph("TRADES", sub_style))
+            for item in trades:
+                text = str(item).strip()
+                # Strip trade name prefix ("Scaffolders - activity" → "activity")
+                if " - " in text:
+                    text = text.split(" - ", 1)[1].strip()
+                if text:
+                    block_items.append(Paragraph(f"• {text}", body_style))
+
+        if admin:
+            block_items.append(Paragraph("ADMINISTRATION", sub_style))
+            for item in admin:
+                text = str(item).strip()
+                if text:
+                    block_items.append(Paragraph(f"• {text}", body_style))
+
+    block_items.append(Spacer(1, 4))
+
+    try:
+        elements.append(KeepTogether(block_items))
+    except Exception:
+        elements.extend(block_items)
+
+    return elements
+
+
+def generate_site_weekly_ai_pdf(
+    tenant_name: str,
+    site_name: str,
+    site_address: str,
+    week_start: str,
+    week_end: str,
+    content: dict,
+    weather: Optional[dict] = None,
+    grid: Optional[list] = None,
+    logo_bytes: Optional[bytes] = None,
+) -> bytes:
+    """
+    Generate a PDF for the Site Weekly AI report.
+    content dict: {weekly_summary, key_milestones, days, risks, plans}
+    weather: {iso_date: {condition, temp_max, temp_min, rainfall_mm, icon}}
+    """
+    buffer = io.BytesIO()
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=18 * mm,
+        leftMargin=18 * mm,
+        topMargin=20 * mm,
+        bottomMargin=22 * mm,
+        title=f"Site Weekly Report – {site_name}",
+    )
+
+    styles = get_styles()
+    doc_width = doc.width
+    elements = []
+
+    # ── Confidential footer ──────────────────────────────────────────────────
+    def _add_confidential_footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(DARK_GREY)
+        footer_text = "Confidential – Client Use Only"
+        page_num = f"Page {doc.page}"
+        canvas.drawString(doc.leftMargin, 12 * mm, footer_text)
+        canvas.drawRightString(doc.width + doc.leftMargin, 12 * mm, page_num)
+        canvas.setStrokeColor(MID_GREY)
+        canvas.setLineWidth(0.5)
+        canvas.line(doc.leftMargin, 14 * mm, doc.width + doc.leftMargin, 14 * mm)
+        canvas.restoreState()
+
+    # ── Report header ────────────────────────────────────────────────────────
+    try:
+        ws = date.fromisoformat(week_start)
+        we = date.fromisoformat(week_end)
+        week_label = f"{ws.strftime('%-d %B')} – {we.strftime('%-d %B %Y')}"
+    except Exception:
+        week_label = f"{week_start} – {week_end}"
+
+    _default_logo_path = os.path.join(os.path.dirname(__file__), "static", "images", "built-by-mk-v2.png")
+
+    site_name_style = ParagraphStyle(
+        "HeroSite", fontName="Helvetica-Bold", fontSize=22,
+        leading=26, textColor=NAVY,
+    )
+    report_type_style = ParagraphStyle(
+        "HeaderSub", fontName="Helvetica-Bold", fontSize=11,
+        leading=15, textColor=NAVY, spaceBefore=2*mm,
+    )
+    week_style = ParagraphStyle(
+        "HeaderWeek", fontName="Helvetica", fontSize=10,
+        leading=13, textColor=DARK_GREY,
+    )
+    addr_style = ParagraphStyle(
+        "HeaderAddr", fontName="Helvetica", fontSize=8,
+        leading=11, textColor=DARK_GREY, spaceBefore=1*mm,
+    )
+
+    left_items = [
+        Paragraph(site_name, site_name_style),
+        Paragraph("Site Weekly Progress Report", report_type_style),
+        Paragraph(week_label, week_style),
+    ]
+    if site_address:
+        left_items.append(Paragraph(site_address, addr_style))
+
+    # Resolve logo: use tenant-uploaded bytes only; no cross-tenant fallback
+    from PIL import Image as PilImage
+    import io as _io
+    _logo_source = None
+    if logo_bytes:
+        _logo_source = _io.BytesIO(logo_bytes)
+
+    if _logo_source:
+        _pil = PilImage.open(_logo_source).convert("RGBA")
+        _bg = PilImage.new("RGB", _pil.size, (255, 255, 255))
+        _bg.paste(_pil, mask=_pil.split()[3])
+        _buf = _io.BytesIO()
+        _bg.save(_buf, format="PNG")
+        _buf.seek(0)
+        logo_img = Image(_buf, width=40 * mm, height=36 * mm, kind="proportional")
+        header_data = [[left_items, logo_img]]
+        col_widths = [doc_width * 0.68, doc_width * 0.32]
+    else:
+        header_data = [[left_items]]
+        col_widths = [doc_width]
+
+    header_table = Table(header_data, colWidths=col_widths)
+    header_table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (-1, 0), (-1, -1), "RIGHT"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ("LEFTPADDING", (0, 0), (0, -1), 0),
+        ("RIGHTPADDING", (-1, 0), (-1, -1), 0),
+    ]))
+    elements.append(header_table)
+    elements.append(HRFlowable(width="100%", thickness=1.5, color=NAVY, spaceAfter=6*mm, spaceBefore=3*mm))
+
+    # ── Weekly Summary ───────────────────────────────────────────────────────
+    summary = (content.get("weekly_summary") or "").strip()
+    if summary:
+        elements.append(Paragraph("Weekly Summary", styles['SectionHeading']))
+        elements.append(Paragraph(summary, styles['BodyText2']))
+        elements.append(Spacer(1, 4*mm))
+
+    # ── Key Milestones ───────────────────────────────────────────────────────
+    milestones = [m for m in (content.get("key_milestones") or []) if str(m).strip()]
+    if milestones:
+        elements.append(Paragraph("Key Milestones", styles['SectionHeading']))
+        for m in milestones:
+            elements.append(Paragraph(f"• {m}", styles['BulletItem']))
+        elements.append(Spacer(1, 4*mm))
+
+    # ── Looking Ahead ────────────────────────────────────────────────────────
+    looking_ahead = str(content.get("looking_ahead") or "").strip()
+    if looking_ahead:
+        elements.append(Paragraph("Looking Ahead", styles['SectionHeading']))
+        elements.append(Paragraph(looking_ahead, styles['BodyText']))
+        elements.append(Spacer(1, 4*mm))
+
+    # ── Daily Activity ───────────────────────────────────────────────────────
+    elements.append(Paragraph("Daily Activity", styles['SectionHeading']))
+    elements.append(Spacer(1, 2*mm))
+
+    days_dict = content.get("days") or {}
+    sorted_days = sorted(days_dict.keys())
+
+    for iso in sorted_days:
+        day_data = days_dict[iso]
+        elements.extend(_build_day_block(iso, day_data, weather, styles, doc_width))
+
+    elements.append(Spacer(1, 4*mm))
+
+    # ── Risks & Issues ───────────────────────────────────────────────────────
+    risks = [r for r in (content.get("risks") or []) if str(r).strip()]
+    if risks:
+        elements.append(Paragraph("Risks & Issues", styles['SectionHeading']))
+        for r in risks:
+            elements.append(Paragraph(f"• {r}", styles['RiskItem']))
+        elements.append(Spacer(1, 4*mm))
+
+    # ── Plans & Follow-up ────────────────────────────────────────────────────
+    plans = [p for p in (content.get("plans") or []) if str(p).strip()]
+    if plans:
+        elements.append(Paragraph("Plans & Follow-up Actions", styles['SectionHeading']))
+        for p in plans:
+            elements.append(Paragraph(f"• {p}", styles['BulletItem']))
+
+    # Build
+    doc.build(
+        elements,
+        onFirstPage=_add_confidential_footer,
+        onLaterPages=_add_confidential_footer,
+    )
+    buffer.seek(0)
+    return buffer.getvalue()

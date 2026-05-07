@@ -3,7 +3,7 @@
 {% block title %}Site Notes{% endblock %}
 
 {% block content %}
-<div x-data="siteNotesPage()" x-init="init()">
+<div x-data="siteNotesPage()" x-init="init()" @site-note-saved.window="loadNotes(); loadOpenIssueCount()">
     <!-- Toast -->
     <div x-show="toast.show" x-transition class="toast toast-top toast-end z-50" x-cloak>
         <div class="alert" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'">
@@ -57,9 +57,24 @@
                     <input type="date" class="input input-bordered input-sm" x-model="endDate" @change="loadNotes()" />
                 </div>
                 <button class="btn btn-sm btn-ghost" @click="startDate = ''; endDate = ''; loadNotes()">Clear dates</button>
+
+                <!-- Issues Only toggle -->
+                <label class="cursor-pointer flex items-center gap-2 ml-2">
+                    <input type="checkbox" class="checkbox checkbox-warning checkbox-sm" x-model="issuesOnly" @change="loadNotes()" />
+                    <span class="text-sm font-medium">Issues only</span>
+                </label>
             </div>
         </div>
     </div>
+
+    <!-- Issue summary banner -->
+    <template x-if="openIssueCount > 0">
+        <div class="alert alert-warning mb-4 py-2">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+            <span x-text="`${openIssueCount} open issue${openIssueCount > 1 ? 's' : ''} requiring attention`"></span>
+            <button class="btn btn-xs btn-warning" @click="issuesOnly = true; loadNotes()">View Issues</button>
+        </div>
+    </template>
 
     <!-- Loading -->
     <div x-show="loading" class="flex justify-center py-12">
@@ -69,23 +84,68 @@
     <!-- Empty State -->
     <div x-show="!loading && notes.length === 0" x-cloak class="text-center py-12 text-base-content/50">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 mx-auto mb-3 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-        <p class="text-lg">No site notes yet</p>
-        <p class="text-sm mt-1">Click "Add Note" to create the first one</p>
+        <p class="text-lg" x-text="issuesOnly ? 'No open issues' : 'No site notes yet'"></p>
+        <p class="text-sm mt-1" x-text="issuesOnly ? 'All issues have been resolved' : 'Click \"Add Note\" to create the first one'"></p>
     </div>
 
     <!-- Notes Timeline -->
-    <div x-show="!loading && notes.length > 0" x-cloak class="space-y-4">
+    <div x-show="!loading && notes.length > 0" x-cloak class="space-y-3">
         <template x-for="note in notes" :key="note.id">
-            <div class="card bg-base-100 shadow">
+            <div class="card bg-base-100 shadow"
+                 :class="note.is_issue && !note.is_resolved ? 'border-l-4 border-warning' : note.is_issue && note.is_resolved ? 'border-l-4 border-success' : ''">
                 <div class="card-body py-4">
-                    <div class="flex justify-between items-start">
-                        <div class="flex items-center gap-2">
+                    <div class="flex justify-between items-start gap-2">
+                        <!-- Left: site + date + badges -->
+                        <div class="flex flex-wrap items-center gap-2">
                             <span class="badge badge-primary badge-sm" x-text="note.site_name"></span>
-                            <span class="text-xs text-base-content/40" x-text="formatDate(note.created_at)"></span>
+
+                            <!-- Note date (prominent) -->
+                            <span class="font-medium text-sm" x-text="formatNoteDate(note.note_date)"></span>
+
+                            <!-- Written at (if different from note_date) -->
+                            <template x-if="noteDateDiffersFromCreated(note)">
+                                <span class="text-xs text-base-content/40" x-text="`(logged ${formatDate(note.created_at)})`"></span>
+                            </template>
+
+                            <!-- Issue badges -->
+                            <template x-if="note.is_issue && !note.is_resolved">
+                                <span class="badge badge-warning badge-sm gap-1">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" /></svg>
+                                    Open Issue
+                                </span>
+                            </template>
+                            <template x-if="note.is_issue && note.is_resolved">
+                                <span class="badge badge-success badge-sm gap-1">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+                                    Resolved
+                                </span>
+                            </template>
                         </div>
-                        <span class="text-xs text-base-content/40" x-text="note.admin_users?.username || note.admin_users?.email || ''"></span>
+
+                        <!-- Right: author + resolve toggle -->
+                        <div class="flex items-center gap-3 shrink-0">
+                            <span class="text-xs text-base-content/40" x-text="note.admin_users?.username || note.admin_users?.email || ''"></span>
+
+                            <!-- Resolve toggle (issues only) -->
+                            <template x-if="note.is_issue">
+                                <label class="flex items-center gap-1.5 cursor-pointer" :title="note.is_resolved ? 'Mark as open' : 'Mark as resolved'">
+                                    <span class="text-xs" :class="note.is_resolved ? 'text-success' : 'text-warning'"
+                                          x-text="note.is_resolved ? 'Resolved' : 'Unresolved'"></span>
+                                    <input type="checkbox" class="toggle toggle-sm"
+                                           :class="note.is_resolved ? 'toggle-success' : 'toggle-warning'"
+                                           :checked="note.is_resolved"
+                                           @change="toggleResolve(note)" />
+                                </label>
+                            </template>
+                        </div>
                     </div>
+
                     <p class="mt-2 whitespace-pre-wrap" x-text="note.note_text"></p>
+
+                    <!-- Resolved info -->
+                    <template x-if="note.is_issue && note.is_resolved && note.resolved_at">
+                        <p class="text-xs text-success/70 mt-1" x-text="`Resolved ${formatDate(note.resolved_at)}`"></p>
+                    </template>
 
                     <!-- Attachments -->
                     <template x-if="note.attachments?.length > 0">
@@ -119,8 +179,10 @@ function siteNotesPage() {
         selectedSiteId: '',
         startDate: '',
         endDate: '',
+        issuesOnly: false,
         loading: false,
         notes: [],
+        openIssueCount: 0,
         toast: { show: false, message: '', type: 'success' },
 
         async init() {
@@ -142,6 +204,7 @@ function siteNotesPage() {
                 await this.loadSites();
             }
             await this.loadNotes();
+            await this.loadOpenIssueCount();
         },
 
         async loadTenants() {
@@ -172,6 +235,7 @@ function siteNotesPage() {
             this.selectedSiteId = '';
             await this.loadSites();
             await this.loadNotes();
+            await this.loadOpenIssueCount();
         },
 
         async loadNotes() {
@@ -182,6 +246,7 @@ function siteNotesPage() {
                 if (this.selectedSiteId) url += `&site_id=${this.selectedSiteId}`;
                 if (this.startDate) url += `&start_date=${this.startDate}`;
                 if (this.endDate) url += `&end_date=${this.endDate}`;
+                if (this.issuesOnly) url += `&issues_only=true`;
 
                 const resp = await fetch(url);
                 const d = await resp.json();
@@ -194,10 +259,56 @@ function siteNotesPage() {
             this.loading = false;
         },
 
+        async loadOpenIssueCount() {
+            try {
+                let url = '/admin/site-notes/data?limit=200&issues_only=true';
+                if (this.selectedTenantId) url += `&tenant_id=${this.selectedTenantId}`;
+                if (this.selectedSiteId) url += `&site_id=${this.selectedSiteId}`;
+                const resp = await fetch(url);
+                const d = await resp.json();
+                if (d.success) {
+                    this.openIssueCount = (d.notes || []).filter(n => !n.is_resolved).length;
+                }
+            } catch (e) {}
+        },
+
+        async toggleResolve(note) {
+            const newResolved = !note.is_resolved;
+            try {
+                const resp = await fetch(`/admin/site-notes/${note.id}/resolve`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ resolved: newResolved }),
+                });
+                const d = await resp.json();
+                if (d.success) {
+                    note.is_resolved = newResolved;
+                    note.resolved_at = newResolved ? new Date().toISOString() : null;
+                    this.openIssueCount = this.notes.filter(n => n.is_issue && !n.is_resolved).length;
+                    this.showToast(newResolved ? 'Issue marked as resolved' : 'Issue re-opened', 'success');
+                } else {
+                    this.showToast('Failed to update issue status', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error updating issue', 'error');
+            }
+        },
+
+        formatNoteDate(dateStr) {
+            if (!dateStr) return '';
+            const d = new Date(dateStr + 'T00:00:00');
+            return d.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+        },
+
         formatDate(dateStr) {
             if (!dateStr) return '';
             const d = new Date(dateStr);
-            return d.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+            return d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+        },
+
+        noteDateDiffersFromCreated(note) {
+            if (!note.note_date || !note.created_at) return false;
+            return note.note_date !== note.created_at.slice(0, 10);
         },
 
         showToast(message, type = 'success') {
