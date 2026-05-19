@@ -317,6 +317,31 @@
             </div>
         </div>
 
+        <!-- ─── PLANS & FOLLOW-UPS ─────────────────────────────────────── -->
+        <div class="card bg-base-100 shadow">
+            <div class="card-body">
+                <div class="flex justify-between items-center mb-3">
+                    <h2 class="card-title text-lg">Plans & Follow-ups</h2>
+                    <button class="btn btn-xs btn-outline btn-primary gap-1" @click="enhanceSection('plans', null)" :disabled="enhancing['plans']">
+                        <template x-if="!enhancing['plans']">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                        </template>
+                        <span class="loading loading-spinner loading-xs" x-show="enhancing['plans']"></span>
+                        AI Enhance
+                    </button>
+                </div>
+                <p class="text-xs text-base-content/50 mb-2">One action per line</p>
+                <textarea
+                    class="textarea textarea-bordered w-full text-sm font-mono leading-relaxed"
+                    rows="4"
+                    placeholder="One follow-up action per line…"
+                    x-model="plansText"
+                    @blur="saveSection('plans', null, plansText)"
+                    @input="autoResize($event.target)"
+                ></textarea>
+            </div>
+        </div>
+
         <!-- ─── LOOKING AHEAD ──────────────────────────────────────────── -->
         <div class="card bg-base-100 shadow">
             <div class="card-body">
@@ -478,30 +503,6 @@
             </div>
         </div>
 
-        <!-- ─── PLANS & FOLLOW-UPS ─────────────────────────────────────── -->
-        <div class="card bg-base-100 shadow">
-            <div class="card-body">
-                <div class="flex justify-between items-center mb-3">
-                    <h2 class="card-title text-lg">Plans & Follow-ups</h2>
-                    <button class="btn btn-xs btn-outline btn-primary gap-1" @click="enhanceSection('plans', null)" :disabled="enhancing['plans']">
-                        <template x-if="!enhancing['plans']">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                        </template>
-                        <span class="loading loading-spinner loading-xs" x-show="enhancing['plans']"></span>
-                        AI Enhance
-                    </button>
-                </div>
-                <p class="text-xs text-base-content/50 mb-2">One action per line</p>
-                <textarea
-                    class="textarea textarea-bordered w-full text-sm font-mono leading-relaxed"
-                    rows="4"
-                    placeholder="One follow-up action per line…"
-                    x-model="plansText"
-                    @blur="saveSection('plans', null, plansText)"
-                    @input="autoResize($event.target)"
-                ></textarea>
-            </div>
-        </div>
 
     </div><!-- end report content -->
 </div>

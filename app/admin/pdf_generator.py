@@ -1430,11 +1430,27 @@ def generate_site_weekly_ai_pdf(
             elements.append(Paragraph(f"• {m}", styles['BulletItem']))
         elements.append(Spacer(1, 4*mm))
 
+    # ── Plans & Follow-up ────────────────────────────────────────────────────
+    plans = [p for p in (content.get("plans") or []) if str(p).strip()]
+    if plans:
+        elements.append(Paragraph("Plans & Follow-up Actions", styles['SectionHeading']))
+        for p in plans:
+            elements.append(Paragraph(f"• {p}", styles['BulletItem']))
+        elements.append(Spacer(1, 4*mm))
+
     # ── Looking Ahead ────────────────────────────────────────────────────────
     looking_ahead = str(content.get("looking_ahead") or "").strip()
     if looking_ahead:
         elements.append(Paragraph("Looking Ahead", styles['SectionHeading']))
-        elements.append(Paragraph(looking_ahead, styles['BodyText']))
+        for line in looking_ahead.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                elements.append(Spacer(1, 2*mm))
+            elif stripped[0] in ('-', '•', '*', '–'):
+                text = stripped.lstrip('-•*–').strip()
+                elements.append(Paragraph(f"• {text}", styles['BulletItem']))
+            else:
+                elements.append(Paragraph(stripped, styles['BodyText2']))
         elements.append(Spacer(1, 4*mm))
 
     # ── Daily Activity ───────────────────────────────────────────────────────
@@ -1456,14 +1472,6 @@ def generate_site_weekly_ai_pdf(
         elements.append(Paragraph("Risks & Issues", styles['SectionHeading']))
         for r in risks:
             elements.append(Paragraph(f"• {r}", styles['RiskItem']))
-        elements.append(Spacer(1, 4*mm))
-
-    # ── Plans & Follow-up ────────────────────────────────────────────────────
-    plans = [p for p in (content.get("plans") or []) if str(p).strip()]
-    if plans:
-        elements.append(Paragraph("Plans & Follow-up Actions", styles['SectionHeading']))
-        for p in plans:
-            elements.append(Paragraph(f"• {p}", styles['BulletItem']))
 
     # Build
     doc.build(

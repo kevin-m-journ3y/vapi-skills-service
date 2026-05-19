@@ -395,12 +395,11 @@ async def get_weather_for_site(
     d_end = date_type.fromisoformat(end_date)
     today = date_type.today()
 
-    # Cap end date to yesterday — we only want actual observed weather, not forecasts
-    # For today, the morning may be complete but afternoon not yet — include today
-    # but it will be re-fetched next time once the day is complete
-    effective_end = min(d_end, today)
+    # Include future/current dates using the forecast API — allows Friday to show
+    # predicted weather when the report is run mid-week or on Friday morning.
+    # The _fetch_weather_from_api call automatically picks archive vs forecast API.
+    effective_end = d_end
     if effective_end < d_start:
-        # Entire range is in the future — no weather to show
         return {"_meta": {"location": "", "source": ""}}
 
     effective_end_str = effective_end.isoformat()
