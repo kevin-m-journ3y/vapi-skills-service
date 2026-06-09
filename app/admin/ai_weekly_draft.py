@@ -400,4 +400,5 @@ def _empty_draft(work_days: List[str]) -> Dict[str, Any]:
         },
         "risks": [],
         "plans": [],
+        "meeting_agenda": [],
     }

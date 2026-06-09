@@ -5104,6 +5104,8 @@ async def get_site_weekly_ai_draft(
             # ── draft content ──────────────────────────────────────────────
             # Preserve user-authored "looking_ahead" across regeneration
             _preserved_looking_ahead = (saved_content or {}).get("looking_ahead", "")
+            # Preserve user-authored "meeting_agenda" — no AI/raw-data source, so it must survive regeneration
+            _preserved_meeting_agenda = (saved_content or {}).get("meeting_agenda", [])
 
             if saved_content and not generate:
                 # Return saved draft — no AI call needed
@@ -5140,6 +5142,7 @@ async def get_site_weekly_ai_draft(
                 )
                 # Restore user-authored content that AI must never overwrite
                 draft["looking_ahead"] = _preserved_looking_ahead
+                draft["meeting_agenda"] = _preserved_meeting_agenda
                 is_saved = False
 
                 # Auto-save immediately so PDF works without manual edits
@@ -5253,7 +5256,7 @@ async def save_weekly_ai_section(request: Request):
             # Patch the section
             if section in ("weekly_summary", "looking_ahead"):
                 existing[section] = content_value
-            elif section in ("key_milestones", "risks", "plans"):
+            elif section in ("key_milestones", "risks", "plans", "meeting_agenda"):
                 lines = [l.strip() for l in content_value.split("\n") if l.strip()]
                 existing[section] = lines
             elif section in ("bbmk_works", "trades", "administration") and day_date:

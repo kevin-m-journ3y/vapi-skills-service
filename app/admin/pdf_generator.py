@@ -1438,6 +1438,14 @@ def generate_site_weekly_ai_pdf(
             elements.append(Paragraph(f"• {p}", styles['BulletItem']))
         elements.append(Spacer(1, 4*mm))
 
+    # ── Site Meeting Agenda ──────────────────────────────────────────────────
+    meeting_agenda = [a for a in (content.get("meeting_agenda") or []) if str(a).strip()]
+    if meeting_agenda:
+        elements.append(Paragraph("Site Meeting Agenda", styles['SectionHeading']))
+        for a in meeting_agenda:
+            elements.append(Paragraph(f"• {a}", styles['BulletItem']))
+        elements.append(Spacer(1, 4*mm))
+
     # ── Looking Ahead ────────────────────────────────────────────────────────
     looking_ahead = str(content.get("looking_ahead") or "").strip()
     if looking_ahead:

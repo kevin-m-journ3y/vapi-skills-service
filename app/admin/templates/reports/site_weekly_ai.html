@@ -342,6 +342,25 @@
             </div>
         </div>
 
+        <!-- ─── SITE MEETING AGENDA ────────────────────────────────────── -->
+        <div class="card bg-base-100 shadow">
+            <div class="card-body">
+                <div class="mb-3">
+                    <h2 class="card-title text-lg">Site Meeting Agenda</h2>
+                    <p class="text-xs text-base-content/40 mt-0.5">Protected from regeneration — your edits here are always preserved</p>
+                </div>
+                <p class="text-xs text-base-content/50 mb-2">One agenda item per line — leave blank to omit from the report</p>
+                <textarea
+                    class="textarea textarea-bordered w-full text-sm font-mono leading-relaxed"
+                    rows="4"
+                    placeholder="One agenda item per line…"
+                    x-model="meetingAgendaText"
+                    @blur="saveSection('meeting_agenda', null, meetingAgendaText)"
+                    @input="autoResize($event.target)"
+                ></textarea>
+            </div>
+        </div>
+
         <!-- ─── LOOKING AHEAD ──────────────────────────────────────────── -->
         <div class="card bg-base-100 shadow">
             <div class="card-body">
@@ -545,6 +564,7 @@ function siteWeeklyAi() {
         milestonesText: '',
         risksText: '',
         plansText: '',
+        meetingAgendaText: '',
         lookingAheadText: '',
         daySections: {},  // keyed "iso_section" e.g. "2026-04-28_bbmk_works"
 
@@ -727,6 +747,7 @@ function siteWeeklyAi() {
             this.milestonesText = (this.draft.key_milestones || []).join('\n');
             this.risksText = (this.draft.risks || []).join('\n');
             this.plansText = (this.draft.plans || []).join('\n');
+            this.meetingAgendaText = (this.draft.meeting_agenda || []).join('\n');
             this.lookingAheadText = this.draft.looking_ahead || '';
             // Populate flat daySections map so x-model works on day textareas
             const ds = {};
