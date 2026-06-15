@@ -28,6 +28,8 @@ from typing import Optional
 
 import httpx
 
+from app.services.photo_upload import photo_link
+
 logger = logging.getLogger(__name__)
 
 PENDING_TTL_MINUTES = 45
@@ -45,6 +47,13 @@ _MEDIA_EXT = {
     "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/gif": "gif",
     "image/heic": "heic", "image/heif": "heif", "image/webp": "webp",
 }
+
+
+_PHOTO_WORDS = {"photo", "photos", "pic", "pics", "picture", "pictures", "image", "images"}
+
+
+def _is_photo_keyword(body: str) -> bool:
+    return (body or "").strip().lower() in _PHOTO_WORDS
 
 
 def _photos_label(n: int) -> str:
@@ -339,7 +348,7 @@ async def process_inbound(client: httpx.AsyncClient, *, tenant_cfg: dict, user: 
     if kw == "help":
         await _stamp_message(client, message_log_id, category="help")
         return ("Text us what you did at your site and your finish time (e.g. \"poured slab, "
-                "done 3:30\"). Reply STOP to mute reminders.")
+                "done 3:30\"). Reply PHOTO for a photo-upload link. Reply STOP to mute reminders.")
     if user and kw in ("stop", "start"):
         await _set_reminders_enabled(client, user["id"], kw == "start")
         await _stamp_message(client, message_log_id, category=kw)
@@ -404,8 +413,16 @@ async def process_inbound(client: httpx.AsyncClient, *, tenant_cfg: dict, user: 
         names = " or ".join(o["site_name"] or "?" for o in options)
         return f"Which site is this for — {names}?"
 
-    # 4. We have a sign-on. Ingest any photos, then handle text (note vs finish).
+    # 4. We have a sign-on.
     site = signon.get("site_name") or "your site"
+
+    # PHOTO keyword -> reply with a web upload link (AU Twilio can't receive MMS)
+    if _is_photo_keyword(body) and not media:
+        await _stamp_message(client, message_log_id, site_id=signon["site_id"],
+                             signon_id=signon["id"], category="other")
+        return f"📷 Add photos for {site} here (link opens ~36h): {photo_link(signon['id'])}"
+
+    # Ingest any photos (MMS — works outside AU), then handle text (note vs finish).
     photo_count = 0
     if media:
         photo_count = await _ingest_media(client, media, tenant_id=tenant_id, user_id=user_id,
@@ -436,4 +453,4 @@ async def process_inbound(client: httpx.AsyncClient, *, tenant_cfg: dict, user: 
         return f"Got it — note + {_photos_label(photo_count)} added to {site} ✅"
     if photo_count:
         return f"Got your {_photos_label(photo_count)} for {site} ✅"
-    return f"Got it — added to {site} ✅"
+    return f"Got it — added to {site} ✅ (reply PHOTO to add a photo)"

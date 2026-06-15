@@ -3,7 +3,7 @@
 import os
 import logging
 from typing import Optional
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Request, Response, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 from jinja2 import Environment, FileSystemLoader
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
@@ -13,6 +13,7 @@ from app.services.signon_service import (
     identify_user_by_phone,
     record_signon,
 )
+from app.services.photo_upload import verify_photo_token, get_signon, store_uploaded_photo
 
 logger = logging.getLogger(__name__)
 
@@ -198,3 +199,52 @@ async def do_signon(short_code: str, request: Request):
     except Exception as e:
         logger.error(f"Sign-on failed: {e}")
         return JSONResponse({"success": False, "error": "Sign-on failed"}, status_code=500)
+
+
+# ============================================
+# PHOTO UPLOAD (web link workaround for AU inbound MMS)
+# ============================================
+
+@router.get("/p/{token}", response_class=HTMLResponse)
+async def photo_upload_page(token: str, request: Request):
+    """Mobile page a worker opens from the SMS'd link to upload site photos."""
+    import httpx
+    from datetime import datetime
+    signon_id = verify_photo_token(token)
+    if not signon_id:
+        return HTMLResponse(_env.get_template("photo/expired.html").render(), status_code=404)
+    async with httpx.AsyncClient() as client:
+        signon = await get_signon(client, signon_id)
+    if not signon:
+        return HTMLResponse(_env.get_template("photo/expired.html").render(), status_code=404)
+    template = _env.get_template("photo/upload.html")
+    return HTMLResponse(template.render(
+        token=token,
+        site_name=signon.get("site_name") or "your site",
+        today=datetime.now().strftime("%a %d %b %Y"),
+    ))
+
+
+@router.post("/p/{token}/upload")
+async def photo_upload_submit(token: str, files: list[UploadFile] = File(default=[]),
+                              caption: str = Form(default=None)):
+    """Receive uploaded photos, store them, anchor to the sign-on."""
+    import httpx
+    signon_id = verify_photo_token(token)
+    if not signon_id:
+        return JSONResponse({"success": False, "error": "This link has expired"}, status_code=400)
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        signon = await get_signon(client, signon_id)
+        if not signon:
+            return JSONResponse({"success": False, "error": "Sign-on not found"}, status_code=400)
+        count = 0
+        for f in files:
+            data = await f.read()
+            ctype = f.content_type or "image/jpeg"
+            if not data or not ctype.startswith("image/"):
+                continue
+            if len(data) > 15 * 1024 * 1024:  # 15 MB cap
+                continue
+            if await store_uploaded_photo(client, signon, data, ctype, caption=caption):
+                count += 1
+    return JSONResponse({"success": True, "count": count})

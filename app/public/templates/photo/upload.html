@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <title>Add site photos</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+               background: #f4f5f7; color: #1a1a2e; }
+        .wrap { max-width: 520px; margin: 0 auto; padding: 20px 16px 48px; }
+        .card { background: #fff; border-radius: 16px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+        h1 { font-size: 1.35rem; margin: 0 0 4px; }
+        .sub { color: #6b7280; font-size: .95rem; margin: 0 0 20px; }
+        .drop { border: 2px dashed #c7ccd6; border-radius: 14px; padding: 28px 16px; text-align: center;
+                color: #4b5563; cursor: pointer; transition: border-color .15s; }
+        .drop:active { border-color: #6d28d9; }
+        .drop .icon { font-size: 2.4rem; }
+        input[type=file] { display: none; }
+        .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 16px; }
+        .grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; border: 1px solid #e5e7eb; }
+        textarea { width: 100%; margin-top: 14px; border: 1px solid #d1d5db; border-radius: 10px; padding: 10px;
+                   font: inherit; resize: vertical; min-height: 44px; }
+        button { width: 100%; margin-top: 16px; padding: 15px; border: 0; border-radius: 12px; background: #6d28d9;
+                 color: #fff; font-size: 1.05rem; font-weight: 600; cursor: pointer; }
+        button:disabled { background: #c4b5fd; }
+        .status { margin-top: 14px; text-align: center; font-weight: 600; }
+        .ok { color: #047857; }
+        .err { color: #b91c1c; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="card">
+        <h1>📷 Add site photos</h1>
+        <p class="sub">{{ site_name }} · {{ today }}</p>
+
+        <label class="drop" for="fileInput">
+            <div class="icon">＋</div>
+            <div>Tap to take or choose photos</div>
+        </label>
+        <input id="fileInput" type="file" accept="image/*" capture="environment" multiple>
+
+        <div class="grid" id="preview"></div>
+
+        <textarea id="caption" placeholder="Optional note about these photos…"></textarea>
+
+        <button id="uploadBtn" disabled>Upload</button>
+        <div class="status" id="status"></div>
+    </div>
+</div>
+
+<script>
+    const token = {{ token | tojson }};
+    const input = document.getElementById('fileInput');
+    const preview = document.getElementById('preview');
+    const btn = document.getElementById('uploadBtn');
+    const status = document.getElementById('status');
+    let files = [];
+
+    input.addEventListener('change', () => {
+        files = files.concat(Array.from(input.files));
+        input.value = '';
+        render();
+    });
+
+    function render() {
+        preview.innerHTML = '';
+        files.forEach(f => {
+            const img = document.createElement('img');
+            img.src = URL.createObjectURL(f);
+            preview.appendChild(img);
+        });
+        btn.disabled = files.length === 0;
+        btn.textContent = files.length ? `Upload ${files.length} photo${files.length>1?'s':''}` : 'Upload';
+    }
+
+    btn.addEventListener('click', async () => {
+        if (!files.length) return;
+        btn.disabled = true; status.textContent = 'Uploading…'; status.className = 'status';
+        const fd = new FormData();
+        files.forEach(f => fd.append('files', f));
+        const cap = document.getElementById('caption').value.trim();
+        if (cap) fd.append('caption', cap);
+        try {
+            const r = await fetch(`/p/${token}/upload`, { method: 'POST', body: fd });
+            const d = await r.json();
+            if (d.success) {
+                status.textContent = `✅ ${d.count} photo${d.count>1?'s':''} added — thanks!`;
+                status.className = 'status ok';
+                files = []; document.getElementById('caption').value = ''; render();
+            } else {
+                status.textContent = d.error || 'Upload failed'; status.className = 'status err'; btn.disabled = false;
+            }
+        } catch (e) {
+            status.textContent = 'Upload failed — check signal and try again'; status.className = 'status err'; btn.disabled = false;
+        }
+    });
+</script>
+</body>
+</html>
