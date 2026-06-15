@@ -216,6 +216,57 @@ async def get_qr_config(request: Request, tenant_id: str = None):
         return {"success": True, "config": config, "tenant_id": tenant_id}
 
 
+@router.get("/admin/qr-signons/messaging-route")
+async def get_messaging_route(request: Request, tenant_id: str = None):
+    """Report where the tenant's Twilio number currently routes inbound SMS:
+    'app' (our endpoint) vs 'vapi' vs 'other'/'not_set'. Drives the route
+    indicator so a toggle that's on but not yet repointed is obvious."""
+    import base64
+    user_session = await _get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        tenant_id = user_session.get("tenant_id")
+    if not tenant_id:
+        return {"success": False, "error": "No tenant"}
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        cfg = await client.get(
+            f"{_url()}/rest/v1/qr_signon_config", headers=_headers(),
+            params={"tenant_id": f"eq.{tenant_id}", "select": "twilio_from_number"},
+        )
+        rows = cfg.json() if cfg.status_code == 200 else []
+        number = (rows[0].get("twilio_from_number") if rows else "") or ""
+        if not number:
+            return {"success": True, "route": "not_set", "number": None}
+
+        sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+        tok = os.getenv("TWILIO_AUTH_TOKEN", "")
+        if not sid or not tok:
+            return {"success": True, "route": "unknown", "number": number}
+
+        auth = base64.b64encode(f"{sid}:{tok}".encode()).decode()
+        try:
+            tw = await client.get(
+                f"https://api.twilio.com/2010-04-01/Accounts/{sid}/IncomingPhoneNumbers.json",
+                headers={"Authorization": f"Basic {auth}"},
+                params={"PhoneNumber": number},
+            )
+            nums = tw.json().get("incoming_phone_numbers", []) if tw.status_code == 200 else []
+            sms_url = (nums[0].get("sms_url") if nums else "") or ""
+        except Exception as e:
+            logger.warning("Twilio route lookup failed for %s: %s", number, str(e))
+            return {"success": True, "route": "unknown", "number": number}
+
+        if "/twilio/sms/inbound" in sms_url:
+            route = "app"
+        elif "api.vapi.ai" in sms_url:
+            route = "vapi"
+        elif not sms_url:
+            route = "not_set"
+        else:
+            route = "other"
+        return {"success": True, "route": route, "number": number, "sms_url": sms_url}
+
+
 @router.post("/admin/qr-signons/config/update")
 async def update_qr_config(request: Request):
     user_session = await _get_session_user(request)
@@ -240,6 +291,13 @@ async def update_qr_config(request: Request):
         "twilio_from_number": body.get("twilio_from_number", ""),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+    # Inbound SMS/MMS settings are super-admin only. Omitted for tenant admins so
+    # their saves can't clobber the toggle / standard-day config.
+    if is_super_admin:
+        config_data["inbound_messaging_enabled"] = body.get("inbound_messaging_enabled", False)
+        config_data["standard_day_start"] = body.get("standard_day_start", "07:00")
+        config_data["standard_day_end"] = body.get("standard_day_end", "15:30")
 
     async with httpx.AsyncClient() as client:
         # Check if config exists

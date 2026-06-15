@@ -258,6 +258,79 @@
                             </div>
                         </div>
 
+                        <!-- Text & Photo Updates (SMS/MMS) - super admin only -->
+                        <template x-if="isSuperAdmin">
+                            <div>
+                                <div class="divider"></div>
+                                <div class="cursor-pointer select-none" @click="toggleInboundPanel(tenant.id)">
+                                    <div class="flex justify-between items-center">
+                                        <h3 class="font-semibold text-lg">Text &amp; Photo Updates (SMS)</h3>
+                                        <div class="flex items-center gap-2">
+                                            <span class="badge" :class="qrConfig[tenant.id]?.inbound_messaging_enabled ? 'badge-success' : 'badge-ghost'"
+                                                  x-text="qrConfig[tenant.id]?.inbound_messaging_enabled ? 'Enabled' : 'Disabled'"></span>
+                                            <svg xmlns="http://www.w3.org/2000/svg"
+                                                 class="h-5 w-5 transition-transform duration-200"
+                                                 :class="{'rotate-180': inboundExpanded[tenant.id]}"
+                                                 fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                                            </svg>
+                                        </div>
+                                    </div>
+                                    <p class="text-sm text-base-content/50 mt-1">Let workers text/photo their site updates instead of calling Jill</p>
+                                </div>
+
+                                <div x-show="inboundExpanded[tenant.id]" x-transition x-cloak class="mt-4">
+                                    <div x-show="loadingQr[tenant.id]" class="flex justify-center py-6">
+                                        <span class="loading loading-spinner loading-md"></span>
+                                    </div>
+
+                                    <div x-show="!loadingQr[tenant.id]" class="space-y-4">
+                                        <div class="form-control">
+                                            <label class="label cursor-pointer justify-start gap-4">
+                                                <input type="checkbox" class="toggle toggle-primary toggle-lg"
+                                                       x-model="qrConfig[tenant.id].inbound_messaging_enabled" />
+                                                <span class="label-text text-lg font-semibold">Enable Inbound Text Updates</span>
+                                            </label>
+                                            <label class="label py-0"><span class="label-text-alt text-base-content/40">Workers text/photo updates to this company's number; rolls into their timesheet</span></label>
+                                        </div>
+
+                                        <div class="text-sm px-1"
+                                             :class="{
+                                                'text-success': messagingRoute[tenant.id] === 'app',
+                                                'text-warning': ['vapi','other','not_set'].includes(messagingRoute[tenant.id]),
+                                                'text-base-content/40': ['','unknown'].includes(messagingRoute[tenant.id])
+                                             }">
+                                            <span x-show="messagingRoute[tenant.id] === 'app'">● Messaging route: app ✅ — inbound reaches us</span>
+                                            <span x-show="messagingRoute[tenant.id] === 'vapi'">● Messaging route: VAPI ⚠️ — repoint the Twilio webhook or inbound won't arrive</span>
+                                            <span x-show="messagingRoute[tenant.id] === 'other'">● Messaging route: elsewhere ⚠️ — points to a non-app URL</span>
+                                            <span x-show="messagingRoute[tenant.id] === 'not_set'">● No Twilio number set for this company ⚠️ (set it under Phone Numbers)</span>
+                                            <span x-show="['','unknown'].includes(messagingRoute[tenant.id])">● Messaging route: checking…</span>
+                                        </div>
+
+                                        <div class="grid grid-cols-2 gap-2 max-w-sm">
+                                            <div class="form-control">
+                                                <label class="label py-1"><span class="label-text text-xs">Standard day start</span></label>
+                                                <input type="time" class="input input-bordered input-sm" x-model="qrConfig[tenant.id].standard_day_start" />
+                                            </div>
+                                            <div class="form-control">
+                                                <label class="label py-1"><span class="label-text text-xs">Standard day end</span></label>
+                                                <input type="time" class="input input-bordered input-sm" x-model="qrConfig[tenant.id].standard_day_end" />
+                                            </div>
+                                        </div>
+                                        <label class="label py-0"><span class="label-text-alt text-base-content/40">Standard hours for the "set to standard day" fix on text timesheets logged without a finish time</span></label>
+
+                                        <div class="flex justify-end">
+                                            <button class="btn btn-primary btn-sm" @click="saveQrConfig(tenant.id)"
+                                                    :disabled="savingQr[tenant.id]">
+                                                <span x-show="!savingQr[tenant.id]">Save Text Settings</span>
+                                                <span x-show="savingQr[tenant.id]" class="loading loading-spinner loading-sm"></span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
                         <!-- Admin Access -->
                         <div>
                             <div class="divider"></div>
@@ -517,7 +590,9 @@ function settingsPage() {
 
         // QR Config
         qrConfig: {},
+        messagingRoute: {},
         qrExpanded: {},
+        inboundExpanded: {},
         loadingQr: {},
         savingQr: {},
 
@@ -650,6 +725,8 @@ function settingsPage() {
                         for (const t of this.tenants) {
                             this.qrConfig[t.id] = this._defaultQrConfig();
                             this.qrExpanded[t.id] = false;
+                            this.inboundExpanded[t.id] = false;
+                            this.messagingRoute[t.id] = '';
                             this.loadingQr[t.id] = false;
                             this.savingQr[t.id] = false;
                             this.phoneExpanded[t.id] = false;
@@ -685,6 +762,9 @@ function settingsPage() {
                 manager_phone_number: '',
                 post_signon_message: 'Remember to complete your health and safety sign-in form.',
                 twilio_from_number: '',
+                inbound_messaging_enabled: false,
+                standard_day_start: '07:00',
+                standard_day_end: '15:30',
             };
         },
 
@@ -696,6 +776,16 @@ function settingsPage() {
             }
         },
 
+        async toggleInboundPanel(tenantId) {
+            this.inboundExpanded[tenantId] = !this.inboundExpanded[tenantId];
+            if (!this.inboundExpanded[tenantId]) return;
+            if (!this._qrLoaded?.[tenantId]) {
+                await this.loadQrConfig(tenantId);
+            } else if (this.isSuperAdmin) {
+                this.loadMessagingRoute(tenantId);
+            }
+        },
+
         async loadQrConfig(tenantId) {
             this.loadingQr[tenantId] = true;
             try {
@@ -704,12 +794,26 @@ function settingsPage() {
                     const data = await resp.json();
                     if (data.success && data.config) {
                         this.qrConfig[tenantId] = { ...this._defaultQrConfig(), ...data.config };
+                        // Normalise TIME fields (DB returns 'HH:MM:SS') for the time inputs
+                        this.qrConfig[tenantId].standard_day_start = (this.qrConfig[tenantId].standard_day_start || '07:00').slice(0, 5);
+                        this.qrConfig[tenantId].standard_day_end = (this.qrConfig[tenantId].standard_day_end || '15:30').slice(0, 5);
                     }
                 }
                 if (!this._qrLoaded) this._qrLoaded = {};
                 this._qrLoaded[tenantId] = true;
+                if (this.isSuperAdmin) this.loadMessagingRoute(tenantId);
             } finally {
                 this.loadingQr[tenantId] = false;
+            }
+        },
+
+        async loadMessagingRoute(tenantId) {
+            this.messagingRoute[tenantId] = '';
+            try {
+                const resp = await fetch(`/admin/qr-signons/messaging-route?tenant_id=${tenantId}`, { credentials: 'same-origin' });
+                this.messagingRoute[tenantId] = resp.ok ? ((await resp.json()).route || 'unknown') : 'unknown';
+            } catch (err) {
+                this.messagingRoute[tenantId] = 'unknown';
             }
         },
 

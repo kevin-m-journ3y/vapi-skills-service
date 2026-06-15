@@ -161,6 +161,10 @@ app.include_router(admin_router)
 from app.admin.routes_qr import router as qr_admin_router
 app.include_router(qr_admin_router)
 
+# Include inbound Twilio SMS/MMS webhook (site updates feature)
+from app.services.twilio_inbound import router as twilio_inbound_router
+app.include_router(twilio_inbound_router)
+
 # Mount static files for admin interface LAST (catch-all)
 # Handle case where static directory might not exist in deployment
 try:

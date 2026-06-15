@@ -61,7 +61,7 @@ async def _get_enabled_tenants() -> list:
             params={
                 "is_enabled": "eq.true",
                 "reminder_enabled": "eq.true",
-                "select": "tenant_id,first_reminder_time,second_reminder_time,jill_phone_number,twilio_from_number",
+                "select": "tenant_id,first_reminder_time,second_reminder_time,jill_phone_number,twilio_from_number,inbound_messaging_enabled",
             },
         )
         if resp.status_code != 200:
@@ -342,6 +342,12 @@ def _acquire_scheduler_lock() -> bool:
 
 async def start_scheduler():
     """Start the scheduler and load all tenant jobs. Called on app startup."""
+    # Safety: local/dev instances must not run the reminder scheduler against the
+    # shared prod DB (would double-send real reminders alongside Railway).
+    if os.getenv("DISABLE_SCHEDULER", "").lower() == "true":
+        logger.info("Reminder scheduler disabled (DISABLE_SCHEDULER=true)")
+        return
+
     if not _acquire_scheduler_lock():
         return
 
