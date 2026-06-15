@@ -2,31 +2,67 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#6d28d9">
     <title>Add site photos</title>
     <style>
-        * { box-sizing: border-box; }
-        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-               background: #f4f5f7; color: #1a1a2e; }
-        .wrap { max-width: 520px; margin: 0 auto; padding: 20px 16px 48px; }
-        .card { background: #fff; border-radius: 16px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
-        h1 { font-size: 1.35rem; margin: 0 0 4px; }
-        .sub { color: #6b7280; font-size: .95rem; margin: 0 0 20px; }
-        .drop { border: 2px dashed #c7ccd6; border-radius: 14px; padding: 28px 16px; text-align: center;
-                color: #4b5563; cursor: pointer; transition: border-color .15s; }
-        .drop:active { border-color: #6d28d9; }
-        .drop .icon { font-size: 2.4rem; }
-        input[type=file] { display: none; }
-        .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 16px; }
-        .grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; border: 1px solid #e5e7eb; }
-        textarea { width: 100%; margin-top: 14px; border: 1px solid #d1d5db; border-radius: 10px; padding: 10px;
-                   font: inherit; resize: vertical; min-height: 44px; }
-        button { width: 100%; margin-top: 16px; padding: 15px; border: 0; border-radius: 12px; background: #6d28d9;
-                 color: #fff; font-size: 1.05rem; font-weight: 600; cursor: pointer; }
-        button:disabled { background: #c4b5fd; }
-        .status { margin-top: 14px; text-align: center; font-weight: 600; }
-        .ok { color: #047857; }
-        .err { color: #b91c1c; }
+        :root {
+            --bg: #f4f5f7; --card: #ffffff; --text: #1a1a2e; --muted: #6b7280;
+            --border: #d8dce3; --drop-bg: #faf9ff; --brand: #6d28d9; --brand-soft: #c4b5fd;
+            --ok: #047857; --err: #b91c1c; --shadow: 0 1px 4px rgba(0,0,0,.08);
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #0f1117; --card: #1b1e27; --text: #f3f4f6; --muted: #9aa3b2;
+                --border: #353a47; --drop-bg: #20232e; --shadow: 0 1px 6px rgba(0,0,0,.4);
+            }
+        }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        html, body { margin: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+            background: var(--bg); color: var(--text);
+            min-height: 100dvh;
+            display: flex; flex-direction: column; align-items: center;
+            padding: max(16px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right))
+                     max(16px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+        }
+        .wrap { width: 100%; max-width: 460px; margin: auto 0; }
+        .card { background: var(--card); border-radius: 18px; padding: clamp(18px, 5vw, 26px); box-shadow: var(--shadow); }
+        h1 { font-size: clamp(1.25rem, 5vw, 1.5rem); margin: 0 0 4px; line-height: 1.2; }
+        .sub { color: var(--muted); font-size: .95rem; margin: 0 0 18px; }
+        .drop {
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+            border: 2px dashed var(--border); border-radius: 16px; background: var(--drop-bg);
+            min-height: 150px; padding: 20px; text-align: center; color: var(--muted);
+            cursor: pointer; transition: border-color .15s, background .15s; user-select: none;
+        }
+        .drop:active { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 6%, var(--drop-bg)); }
+        .drop .icon { font-size: 2.6rem; line-height: 1; color: var(--brand); font-weight: 300; }
+        .drop .hint { font-size: 1rem; font-weight: 500; }
+        input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; margin-top: 14px; }
+        .grid .thumb { position: relative; aspect-ratio: 1; }
+        .grid img { width: 100%; height: 100%; object-fit: cover; border-radius: 12px; border: 1px solid var(--border); display: block; }
+        .grid .rm { position: absolute; top: -7px; right: -7px; width: 24px; height: 24px; border-radius: 50%;
+                    background: var(--err); color: #fff; border: 2px solid var(--card); font-size: 14px; line-height: 1;
+                    display: flex; align-items: center; justify-content: center; cursor: pointer; }
+        textarea {
+            width: 100%; margin-top: 16px; border: 1px solid var(--border); border-radius: 12px; padding: 12px;
+            font: inherit; color: var(--text); background: var(--card); resize: vertical; min-height: 46px;
+        }
+        textarea:focus { outline: none; border-color: var(--brand); }
+        button {
+            width: 100%; margin-top: 16px; padding: 16px; border: 0; border-radius: 14px; background: var(--brand);
+            color: #fff; font-size: 1.05rem; font-weight: 600; cursor: pointer; min-height: 52px;
+        }
+        button:disabled { background: var(--brand-soft); cursor: default; }
+        .status { margin-top: 14px; text-align: center; font-weight: 600; min-height: 1.2em; }
+        .status.ok { color: var(--ok); }
+        .status.err { color: var(--err); }
+        .spin { display: inline-block; width: 16px; height: 16px; border: 2px solid #fff; border-top-color: transparent;
+                border-radius: 50%; animation: s .7s linear infinite; vertical-align: -3px; }
+        @keyframes s { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
@@ -36,8 +72,8 @@
         <p class="sub">{{ site_name }} · {{ today }}</p>
 
         <label class="drop" for="fileInput">
-            <div class="icon">＋</div>
-            <div>Tap to take or choose photos</div>
+            <span class="icon">＋</span>
+            <span class="hint">Tap to take or choose photos</span>
         </label>
         <input id="fileInput" type="file" accept="image/*" capture="environment" multiple>
 
@@ -66,18 +102,26 @@
 
     function render() {
         preview.innerHTML = '';
-        files.forEach(f => {
+        files.forEach((f, idx) => {
+            const wrap = document.createElement('div');
+            wrap.className = 'thumb';
             const img = document.createElement('img');
             img.src = URL.createObjectURL(f);
-            preview.appendChild(img);
+            const rm = document.createElement('div');
+            rm.className = 'rm'; rm.textContent = '×';
+            rm.addEventListener('click', (e) => { e.preventDefault(); files.splice(idx, 1); render(); });
+            wrap.appendChild(img); wrap.appendChild(rm);
+            preview.appendChild(wrap);
         });
         btn.disabled = files.length === 0;
-        btn.textContent = files.length ? `Upload ${files.length} photo${files.length>1?'s':''}` : 'Upload';
+        btn.textContent = files.length ? `Upload ${files.length} photo${files.length > 1 ? 's' : ''}` : 'Upload';
     }
 
     btn.addEventListener('click', async () => {
         if (!files.length) return;
-        btn.disabled = true; status.textContent = 'Uploading…'; status.className = 'status';
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spin"></span>';
+        status.textContent = ''; status.className = 'status';
         const fd = new FormData();
         files.forEach(f => fd.append('files', f));
         const cap = document.getElementById('caption').value.trim();
@@ -86,15 +130,16 @@
             const r = await fetch(`/p/${token}/upload`, { method: 'POST', body: fd });
             const d = await r.json();
             if (d.success) {
-                status.textContent = `✅ ${d.count} photo${d.count>1?'s':''} added — thanks!`;
+                status.textContent = `✅ ${d.count} photo${d.count > 1 ? 's' : ''} added — thanks!`;
                 status.className = 'status ok';
                 files = []; document.getElementById('caption').value = ''; render();
             } else {
-                status.textContent = d.error || 'Upload failed'; status.className = 'status err'; btn.disabled = false;
+                status.textContent = d.error || 'Upload failed'; status.className = 'status err';
             }
         } catch (e) {
-            status.textContent = 'Upload failed — check signal and try again'; status.className = 'status err'; btn.disabled = false;
+            status.textContent = 'Upload failed — check signal and try again'; status.className = 'status err';
         }
+        render();
     });
 </script>
 </body>
