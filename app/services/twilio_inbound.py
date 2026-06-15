@@ -246,11 +246,17 @@ async def inbound_sms(request: Request):
             message_sid=message_sid,
         )
 
-        # 7. Business logic -> reply text
-        # TODO(Phase 2): if num_media > 0, ingest media -> Supabase Storage -> timesheet_media.
+        # 7. Business logic -> reply text. Pass any MMS media for ingestion.
+        media = []
+        for i in range(num_media):
+            u = form.get(f"MediaUrl{i}")
+            if u:
+                media.append({"url": u, "content_type": form.get(f"MediaContentType{i}")})
+
         reply = await process_inbound(
             client, tenant_cfg=tenant_cfg, user=user,
             from_number=from_number, body=body, message_log_id=message_log_id,
+            media=media,
         )
 
         # 8. Send the reply (from the tenant number) and log it

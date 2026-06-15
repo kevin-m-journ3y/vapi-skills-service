@@ -40,6 +40,16 @@ _STOP_WORDS = {"stop", "unsubscribe", "cancel", "stopall", "quit", "end"}
 _START_WORDS = {"start", "subscribe", "unstop", "yes"}
 _HELP_WORDS = {"help", "info", "?"}
 
+MEDIA_BUCKET = "mms-photos"
+_MEDIA_EXT = {
+    "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/gif": "gif",
+    "image/heic": "heic", "image/heif": "heif", "image/webp": "webp",
+}
+
+
+def _photos_label(n: int) -> str:
+    return "photo" if n == 1 else f"{n} photos"
+
 
 def _url() -> str:
     return os.getenv("SUPABASE_URL", "")
@@ -205,6 +215,66 @@ async def _clear_pending(client, tenant_id, from_number) -> None:
 
 
 # ---------------------------------------------------------------------------
+# MMS media ingest: Twilio media -> Supabase Storage -> timesheet_media
+# ---------------------------------------------------------------------------
+async def _download_twilio_media(url, fallback_ctype):
+    """Download a Twilio media URL (auth + follow redirect to the CDN).
+    Returns (bytes, content_type, media_sid)."""
+    sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+    tok = os.getenv("TWILIO_AUTH_TOKEN", "")
+    media_sid = url.rstrip("/").split("/")[-1]
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as c:
+        r = await c.get(url, auth=(sid, tok))
+        if r.status_code != 200:
+            raise RuntimeError(f"download status {r.status_code}")
+        ctype = r.headers.get("Content-Type") or fallback_ctype or "application/octet-stream"
+        return r.content, ctype, media_sid
+
+
+async def _upload_media(client, path, data, content_type) -> bool:
+    r = await client.post(
+        f"{_url()}/storage/v1/object/{MEDIA_BUCKET}/{path}",
+        headers={**_headers(), "Content-Type": content_type or "image/jpeg", "x-upsert": "true"},
+        content=data,
+    )
+    if r.status_code not in (200, 201):
+        logger.error("MMS storage upload failed: %s %s", r.status_code, r.text[:160])
+        return False
+    return True
+
+
+async def _ingest_media(client, media, *, tenant_id, user_id, signon, caption) -> int:
+    """Store each MMS photo, anchored to the sign-on. Returns count stored."""
+    count = 0
+    for m in (media or []):
+        url = m.get("url")
+        if not url:
+            continue
+        try:
+            data, ctype, media_sid = await _download_twilio_media(url, m.get("content_type"))
+        except Exception as e:
+            logger.error("MMS download failed (%s): %s", url, e)
+            continue
+        if not data:
+            continue
+        ext = _MEDIA_EXT.get((ctype or "").split(";")[0].strip().lower(), "bin")
+        path = f"{tenant_id}/{media_sid or str(uuid.uuid4())}.{ext}"
+        if not await _upload_media(client, path, data, ctype):
+            continue
+        media_url = f"{_url()}/storage/v1/object/public/{MEDIA_BUCKET}/{path}"
+        await client.post(
+            f"{_url()}/rest/v1/timesheet_media",
+            headers={**_headers(), "Prefer": "return=minimal,resolution=ignore-duplicates"},
+            params={"on_conflict": "twilio_media_sid"},
+            json={"tenant_id": tenant_id, "user_id": user_id, "site_id": signon.get("site_id"),
+                  "signon_id": signon.get("id"), "media_url": media_url, "content_type": ctype,
+                  "caption": (caption or None), "source": "sms_mms", "twilio_media_sid": media_sid},
+        )
+        count += 1
+    return count
+
+
+# ---------------------------------------------------------------------------
 # Finalization
 # ---------------------------------------------------------------------------
 async def _finalize(client, *, tenant_id, user_id, signon, finish_hhmm, tz) -> str:
@@ -241,6 +311,12 @@ async def _finalize(client, *, tenant_id, user_id, signon, finish_hhmm, tz) -> s
                              "signed_off_at": datetime.now(timezone.utc).isoformat(),
                              "timesheet_id": ts_id})
 
+    # Backfill any photos for this sign-on to the new timesheet
+    await client.patch(f"{_url()}/rest/v1/timesheet_media",
+                       headers={**_headers(), "Prefer": "return=minimal"},
+                       params={"signon_id": f"eq.{signon['id']}", "timesheet_id": "is.null"},
+                       json={"timesheet_id": ts_id})
+
     site = signon.get("site_name") or "your site"
     if incomplete:
         return (f"Saved to {site} ✅ — but the finish time looked off, so I've left hours "
@@ -253,7 +329,8 @@ async def _finalize(client, *, tenant_id, user_id, signon, finish_hhmm, tz) -> s
 # Entry point
 # ---------------------------------------------------------------------------
 async def process_inbound(client: httpx.AsyncClient, *, tenant_cfg: dict, user: Optional[dict],
-                          from_number: str, body: str, message_log_id: Optional[str]) -> Optional[str]:
+                          from_number: str, body: str, message_log_id: Optional[str],
+                          media: Optional[list] = None) -> Optional[str]:
     tenant_id = tenant_cfg["tenant_id"]
     body = body or ""
 
@@ -327,7 +404,13 @@ async def process_inbound(client: httpx.AsyncClient, *, tenant_cfg: dict, user: 
         names = " or ".join(o["site_name"] or "?" for o in options)
         return f"Which site is this for — {names}?"
 
-    # 4. We have a sign-on. Note vs finish.
+    # 4. We have a sign-on. Ingest any photos, then handle text (note vs finish).
+    site = signon.get("site_name") or "your site"
+    photo_count = 0
+    if media:
+        photo_count = await _ingest_media(client, media, tenant_id=tenant_id, user_id=user_id,
+                                          signon=signon, caption=body)
+
     finish = _parse_finish_time(body)
     done = _is_done_signal(body) or finish is not None
 
@@ -345,8 +428,12 @@ async def process_inbound(client: httpx.AsyncClient, *, tenant_cfg: dict, user: 
                            {"signon_id": signon["id"]})
         return "Got it. What time did you finish? (e.g. 3:30pm)"
 
-    # Plain note — accumulate, light ack.
-    await _stamp_message(client, message_log_id, site_id=signon["site_id"],
-                         signon_id=signon["id"], category="note")
-    site = signon.get("site_name") or "your site"
+    # Photo and/or plain note — accumulate, light ack.
+    has_text = bool((body or "").strip())
+    await _stamp_message(client, message_log_id, site_id=signon["site_id"], signon_id=signon["id"],
+                         category="photo" if (photo_count and not has_text) else "note")
+    if photo_count and has_text:
+        return f"Got it — note + {_photos_label(photo_count)} added to {site} ✅"
+    if photo_count:
+        return f"Got your {_photos_label(photo_count)} for {site} ✅"
     return f"Got it — added to {site} ✅"
