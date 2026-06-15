@@ -134,6 +134,22 @@ def _fmt_12h(hhmm: str) -> str:
     return f"{h12}:{mn:02d}{ap}" if mn else f"{h12}{ap}"
 
 
+def _parse_ts(s: str) -> datetime:
+    """Robustly parse a Postgres timestamptz string. Python 3.9's fromisoformat
+    rejects 1/2/4/5-digit fractional seconds and short +00 offsets, which would
+    otherwise throw mid-finalize and lose a real worker's timesheet."""
+    s = (s or "").strip().replace(" ", "T").replace("Z", "+00:00")
+    m = re.search(r"([+-]\d{2}):?(\d{2})?$", s)
+    if m:
+        base, tzs = s[:m.start()], f"{m.group(1)}:{m.group(2) or '00'}"
+    else:
+        base, tzs = s, "+00:00"
+    if "." in base:
+        head, frac = base.split(".", 1)
+        base = f"{head}.{(frac + '000000')[:6]}"
+    return datetime.fromisoformat(f"{base}{tzs}")
+
+
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
@@ -289,7 +305,7 @@ async def _ingest_media(client, media, *, tenant_id, user_id, signon, caption) -
 async def _finalize(client, *, tenant_id, user_id, signon, finish_hhmm, tz) -> str:
     """Create the day's timesheet from accumulated notes + sign-on start + finish
     time, close the sign-on, return the confirmation reply."""
-    start_dt = datetime.fromisoformat(signon["signed_on_at"].replace("Z", "+00:00")).astimezone(tz)
+    start_dt = _parse_ts(signon["signed_on_at"]).astimezone(tz)
     work_date = start_dt.date().isoformat()
     start_hhmm = start_dt.strftime("%H:%M")
 
