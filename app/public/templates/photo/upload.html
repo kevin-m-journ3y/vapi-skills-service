@@ -4,7 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#6d28d9">
-    <title>Add site photos</title>
+    <title>Add site photos · {{ site_name }}</title>
+
+    <!-- Rich link preview (iMessage/SMS unfurl) -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="📷 Add site photos · {{ site_name }}">
+    <meta property="og:description" content="Tap to add photos to your shift.">
+    <meta property="og:image" content="{{ og_image }}">
+    <meta property="og:url" content="{{ og_url }}">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="📷 Add site photos · {{ site_name }}">
+    <meta name="twitter:description" content="Tap to add photos to your shift.">
+    <meta name="twitter:image" content="{{ og_image }}">
     <style>
         :root {
             --bg: #f4f5f7; --card: #ffffff; --text: #1a1a2e; --muted: #6b7280;

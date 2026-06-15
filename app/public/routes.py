@@ -14,6 +14,7 @@ from app.services.signon_service import (
     record_signon,
 )
 from app.services.photo_upload import verify_photo_token, get_signon, store_uploaded_photo
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -210,18 +211,22 @@ async def photo_upload_page(token: str, request: Request):
     """Mobile page a worker opens from the SMS'd link to upload site photos."""
     import httpx
     from datetime import datetime
+    base = settings.webhook_base_url.rstrip("/")
+    og_image = f"{base}/static/images/photo-preview.png"
     signon_id = verify_photo_token(token)
     if not signon_id:
-        return HTMLResponse(_env.get_template("photo/expired.html").render(), status_code=404)
+        return HTMLResponse(_env.get_template("photo/expired.html").render(og_image=og_image), status_code=404)
     async with httpx.AsyncClient() as client:
         signon = await get_signon(client, signon_id)
     if not signon:
-        return HTMLResponse(_env.get_template("photo/expired.html").render(), status_code=404)
+        return HTMLResponse(_env.get_template("photo/expired.html").render(og_image=og_image), status_code=404)
     template = _env.get_template("photo/upload.html")
     return HTMLResponse(template.render(
         token=token,
         site_name=signon.get("site_name") or "your site",
         today=datetime.now().strftime("%a %d %b %Y"),
+        og_image=og_image,
+        og_url=f"{base}/p/{token}",
     ))
 
 

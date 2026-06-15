@@ -436,7 +436,7 @@ async def process_inbound(client: httpx.AsyncClient, *, tenant_cfg: dict, user: 
     if _is_photo_keyword(body) and not media:
         await _stamp_message(client, message_log_id, site_id=signon["site_id"],
                              signon_id=signon["id"], category="other")
-        return f"📷 Add photos for {site} here (link opens ~36h): {photo_link(signon['id'])}"
+        return f"📷 Add photos for {site}:\n{photo_link(signon['id'])}"
 
     # Ingest any photos (MMS — works outside AU), then handle text (note vs finish).
     photo_count = 0
