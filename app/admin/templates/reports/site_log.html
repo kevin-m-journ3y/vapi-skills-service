@@ -79,6 +79,7 @@
                                         <span class="font-medium" x-text="ev.user"></span>
                                         <span x-show="ev.meta" class="text-sm text-base-content/60" x-text="ev.meta"></span>
                                         <span x-show="ev.channel === 'sms'" class="badge badge-info badge-xs">SMS</span>
+                                        <span x-show="ev.channel === 'voice'" class="badge badge-secondary badge-xs">Voice</span>
                                         <span x-show="ev.is_issue" class="badge badge-error badge-xs">Issue</span>
                                     </div>
                                     <p x-show="ev.detail" class="text-sm text-base-content/80 mt-0.5 whitespace-pre-wrap" x-text="ev.detail"></p>
