@@ -105,9 +105,12 @@ function siteLogReport() {
         data: null, loading: false, toast: { show: false, message: '', type: 'success' },
 
         async init() {
+            // Use LOCAL date (not toISOString, which is UTC — in AU morning that
+            // resolves to yesterday and hides today's events).
+            const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
             const today = new Date(); const past = new Date(); past.setDate(today.getDate() - 30);
-            this.endDate = today.toISOString().slice(0, 10);
-            this.startDate = past.toISOString().slice(0, 10);
+            this.endDate = fmt(today);
+            this.startDate = fmt(past);
             try {
                 const r = await fetch('/admin/auth/me', { credentials: 'same-origin' });
                 if (r.ok) { const d = await r.json(); this.currentUser = d.user;
