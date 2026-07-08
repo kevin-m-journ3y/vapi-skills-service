@@ -181,7 +181,8 @@ async def _find_users_needing_reminder(tenant_id: str, timezone_str: str) -> lis
 
 
 async def _send_reminders_for_tenant(
-    tenant_id: str, timezone_str: str, jill_phone: str, from_number: Optional[str] = None
+    tenant_id: str, timezone_str: str, jill_phone: str,
+    from_number: Optional[str] = None, inbound_enabled: bool = False
 ):
     """Send SMS reminders to all users needing one for this tenant."""
     try:
@@ -198,7 +199,15 @@ async def _send_reminders_for_tenant(
                 logger.warning("User %s has no phone number, skipping", user["id"])
                 continue
 
-            if jill_phone:
+            if inbound_enabled:
+                # Tenant has Text & Photo Updates on: the reminder is sent from the
+                # same number that handles both SMS and Jill, so they can just reply.
+                call_part = f", or call {jill_phone} to talk to Jill" if jill_phone else ""
+                message = (
+                    f"Hey {name}, you still have timesheet entries to log for today. "
+                    f"Reply to this text with your update{call_part}."
+                )
+            elif jill_phone:
                 message = (
                     f"Hey {name}, you still have timesheet entries to log for today. "
                     f"Call Jill on {jill_phone} to finish up."
@@ -239,6 +248,7 @@ def _schedule_tenant_jobs(config: dict):
     timezone_str = config.get("timezone", "Australia/Sydney")
     jill_phone = config.get("jill_phone_number", "")
     from_number = config.get("twilio_from_number", "") or None
+    inbound_enabled = bool(config.get("inbound_messaging_enabled"))
 
     # Remove existing jobs first
     _remove_tenant_jobs(tenant_id)
@@ -267,7 +277,7 @@ def _schedule_tenant_jobs(config: dict):
             _send_reminders_for_tenant,
             trigger=trigger,
             id=job_id,
-            args=[tenant_id, timezone_str, jill_phone, from_number],
+            args=[tenant_id, timezone_str, jill_phone, from_number, inbound_enabled],
             replace_existing=True,
             name=f"Reminder {num} for tenant {tenant_id}",
         )
@@ -289,7 +299,7 @@ async def reschedule_tenant(tenant_id: str):
             headers=_headers(),
             params={
                 "tenant_id": f"eq.{tenant_id}",
-                "select": "tenant_id,is_enabled,reminder_enabled,first_reminder_time,second_reminder_time,jill_phone_number,twilio_from_number",
+                "select": "tenant_id,is_enabled,reminder_enabled,first_reminder_time,second_reminder_time,jill_phone_number,twilio_from_number,inbound_messaging_enabled",
             },
         )
         if resp.status_code != 200 or not resp.json():
