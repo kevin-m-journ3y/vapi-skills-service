@@ -2,6 +2,7 @@
 
 import os
 import uuid
+import asyncio
 import httpx
 import logging
 from datetime import datetime, date, timedelta, timezone
@@ -255,6 +256,81 @@ async def send_signon_confirmation(user_id: str, tenant_id: str, site_name: str,
             )
     except Exception as e:
         logger.warning("Sign-on confirmation SMS failed: %s", e)
+
+
+async def send_signoff_confirmation(user_id: str, tenant_id: str, site_id: Optional[str] = None,
+                                    site_name: Optional[str] = None, hours=None,
+                                    tenant_timezone: str = "Australia/Sydney") -> None:
+    """Text the worker a sign-off receipt when they finish via a NON-SMS path
+    (e.g. a Jill voice call), so the SMS thread holds a complete record of the
+    shift regardless of how they signed off.
+
+    Not used for the SMS 'done' flow — that already replies with the finish
+    confirmation. Gated on the tenant's inbound-messaging toggle; best-effort.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            cfg = await client.get(
+                f"{_url()}/rest/v1/qr_signon_config", headers=_headers(),
+                params={"tenant_id": f"eq.{tenant_id}",
+                        "select": "inbound_messaging_enabled,twilio_from_number"})
+            row = (cfg.json()[0] if cfg.status_code == 200 and cfg.json() else {})
+            if not row.get("inbound_messaging_enabled"):
+                return
+            from_number = row.get("twilio_from_number")
+            if not from_number:
+                return
+
+            ur = await client.get(
+                f"{_url()}/rest/v1/users", headers=_headers(),
+                params={"id": f"eq.{user_id}", "select": "phone_number"})
+            urows = ur.json() if ur.status_code == 200 else []
+            to_number = urows[0].get("phone_number") if urows else None
+            if not to_number:
+                return
+
+            if not site_name and site_id:
+                er = await client.get(
+                    f"{_url()}/rest/v1/entities", headers=_headers(),
+                    params={"id": f"eq.{site_id}", "select": "name"})
+                erows = er.json() if er.status_code == 200 else []
+                site_name = erows[0].get("name") if erows else None
+            site_name = site_name or "your site"
+
+            extra = ""
+            try:
+                if hours is not None:
+                    extra = f" {float(hours):g}h logged."
+            except (TypeError, ValueError):
+                extra = ""
+
+            body = f"Signed off from {site_name}.{extra} Thanks!"
+            result = await send_sms(to_number=to_number, message=body, from_number=from_number)
+            await client.post(
+                f"{_url()}/rest/v1/message_log",
+                headers={**_headers(), "Prefer": "return=minimal"},
+                json={"tenant_id": tenant_id, "user_id": user_id, "direction": "outbound",
+                      "channel": "sms", "from_number": from_number, "to_number": to_number,
+                      "body": body, "twilio_message_sid": result.get("sid") if result.get("success") else None,
+                      "status": "sent" if result.get("success") else "failed"},
+            )
+    except Exception as e:
+        logger.warning("Sign-off confirmation SMS failed: %s", e)
+
+
+# Strong refs so fire-and-forget tasks aren't garbage-collected mid-flight.
+_signoff_bg_tasks: set = set()
+
+
+def fire_signoff_confirmation(*args, **kwargs) -> None:
+    """Schedule send_signoff_confirmation without blocking the caller (keeps a
+    live voice response snappy). Safe to call from inside a request handler."""
+    try:
+        task = asyncio.create_task(send_signoff_confirmation(*args, **kwargs))
+        _signoff_bg_tasks.add(task)
+        task.add_done_callback(_signoff_bg_tasks.discard)
+    except Exception as e:
+        logger.warning("Could not schedule sign-off confirmation: %s", e)
 
 
 async def get_active_signons_for_user(user_id: str, tenant_timezone: str = "Australia/Sydney") -> list:

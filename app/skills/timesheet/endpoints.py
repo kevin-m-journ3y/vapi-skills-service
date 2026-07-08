@@ -513,6 +513,15 @@ async def save_timesheet_entry(request: dict):
                     )
                     if close_resp.status_code in (200, 204):
                         logger.info(f"Auto-closed sign-on {signon_id} via timesheet save")
+                        # Text a sign-off receipt (best-effort, non-blocking, and
+                        # gated on the tenant toggle inside the helper) so the SMS
+                        # thread has a record even when they finished by voice.
+                        from app.services.signon_service import fire_signoff_confirmation
+                        fire_signoff_confirmation(
+                            session_context["user_id"], session_context["tenant_id"],
+                            site_id=site_id, hours=hours_worked,
+                            tenant_timezone=session_context.get("tenant_timezone", "Australia/Sydney"),
+                        )
                     else:
                         logger.warning(f"Failed to close sign-on {signon_id}: {close_resp.status_code}")
         except Exception as signon_err:
