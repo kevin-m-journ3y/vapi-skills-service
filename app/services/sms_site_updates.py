@@ -443,6 +443,9 @@ async def process_inbound(client: httpx.AsyncClient, *, tenant_cfg: dict, user: 
     if media:
         photo_count = await _ingest_media(client, media, tenant_id=tenant_id, user_id=user_id,
                                           signon=signon, caption=body)
+    # An MMS reached the webhook but nothing landed (AU inbound MMS is unreliable
+    # and usually can't be retrieved). Don't fake success — point them at the link.
+    media_failed = bool(media) and photo_count == 0
 
     finish = _parse_finish_time(body)
     done = _is_done_signal(body) or finish is not None
@@ -463,8 +466,21 @@ async def process_inbound(client: httpx.AsyncClient, *, tenant_cfg: dict, user: 
 
     # Photo and/or plain note — accumulate, light ack.
     has_text = bool((body or "").strip())
-    await _stamp_message(client, message_log_id, site_id=signon["site_id"], signon_id=signon["id"],
-                         category="photo" if (photo_count and not has_text) else "note")
+    if photo_count and not has_text:
+        cat = "photo"
+    elif has_text:
+        cat = "note"
+    else:
+        cat = "other"  # e.g. an MMS we couldn't ingest, no text
+    await _stamp_message(client, message_log_id, site_id=signon["site_id"],
+                         signon_id=signon["id"], category=cat)
+
+    if media_failed:
+        if has_text:
+            return (f"Got your note for {site} ✅ — but I can't receive photos directly here. "
+                    f"Reply PHOTO for an upload link.")
+        return ("I can't receive photos directly on this number. "
+                "Reply PHOTO and I'll send you an upload link.")
     if photo_count and has_text:
         return f"Got it — note + {_photos_label(photo_count)} added to {site} ✅"
     if photo_count:
