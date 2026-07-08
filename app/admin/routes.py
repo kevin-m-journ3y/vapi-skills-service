@@ -2906,16 +2906,32 @@ async def get_site_log_data(
                                "user_id": m.get("user_id"), "title": "Text update",
                                "detail": m.get("body") or "", "meta": "", "channel": "sms"})
 
-            # Photos (MMS)
+            # Photos (MMS / web upload) — group a batch (same minute + worker)
+            # into one tiled event so multi-photo uploads share a row.
             r = await client.get(f"{SUPA}/rest/v1/timesheet_media", headers=headers, params={
                 **base, "and": f"(created_at.gte.{start_utc},created_at.lte.{end_utc})",
-                "select": "user_id,created_at,media_url,content_type,caption"})
+                "select": "user_id,created_at,media_url,content_type,caption",
+                "order": "created_at.asc"})
+            photo_groups = {}
             for p in (r.json() if r.status_code == 200 else []):
                 uids.add(p.get("user_id"))
                 day, tl, sk = loc(p.get("created_at"))
-                events.append({"type": "photo", "day": day, "sort": sk, "time_label": tl,
-                               "user_id": p.get("user_id"), "title": "Photo",
-                               "detail": p.get("caption") or "", "meta": "", "media_url": p.get("media_url")})
+                gkey = (day, p.get("user_id"), tl)
+                g = photo_groups.get(gkey)
+                if not g:
+                    g = {"type": "photo", "day": day, "sort": sk, "time_label": tl,
+                         "user_id": p.get("user_id"), "title": "Photo",
+                         "detail": p.get("caption") or "", "meta": "", "media_urls": []}
+                    photo_groups[gkey] = g
+                    events.append(g)
+                if p.get("media_url"):
+                    g["media_urls"].append(p["media_url"])
+                if not g["detail"] and p.get("caption"):
+                    g["detail"] = p["caption"]
+            for g in photo_groups.values():
+                n = len(g["media_urls"])
+                if n > 1:
+                    g["meta"] = f"{n} photos"
 
             # Sign-ons
             r = await client.get(f"{SUPA}/rest/v1/site_signons", headers=headers, params={

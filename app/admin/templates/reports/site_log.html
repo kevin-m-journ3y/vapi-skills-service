@@ -83,10 +83,14 @@
                                         <span x-show="ev.is_issue" class="badge badge-error badge-xs">Issue</span>
                                     </div>
                                     <p x-show="ev.detail" class="text-sm text-base-content/80 mt-0.5 whitespace-pre-wrap" x-text="ev.detail"></p>
-                                    <template x-if="ev.type === 'photo' && ev.media_url">
-                                        <a :href="ev.media_url" target="_blank">
-                                            <img :src="ev.media_url" class="mt-2 rounded-lg max-h-48 border border-base-300" loading="lazy" />
-                                        </a>
+                                    <template x-if="ev.type === 'photo' && ev.media_urls && ev.media_urls.length">
+                                        <div class="mt-2 flex flex-wrap gap-2">
+                                            <template x-for="(url, ui) in ev.media_urls" :key="ui">
+                                                <a :href="url" target="_blank">
+                                                    <img :src="url" class="rounded-lg h-32 w-32 object-cover border border-base-300" loading="lazy" />
+                                                </a>
+                                            </template>
+                                        </div>
                                     </template>
                                 </div>
                             </div>
