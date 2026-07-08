@@ -2888,11 +2888,14 @@ async def get_site_log_data(
                 meta = []
                 if st or en: meta.append(f"{st or '?'}–{en or '?'}")
                 if t.get("hours_worked") is not None: meta.append(f"{t['hours_worked']}h")
+                desc = (t.get("work_description") or "").strip()
+                thin = (not desc) or desc == "(logged via SMS, no description)"
                 events.append({"type": "timesheet", "day": t.get("work_date"),
                                "sort": f"{t.get('work_date')}T{(t.get('start_time') or '00:00')}",
                                "time_label": st, "user_id": t.get("user_id"), "title": "Timesheet",
-                               "detail": t.get("work_description") or "", "meta": " · ".join(meta),
-                               "channel": "sms" if not t.get("vapi_call_id") else "voice"})
+                               "detail": "" if thin else desc, "meta": " · ".join(meta),
+                               "channel": "sms" if not t.get("vapi_call_id") else "voice",
+                               "thin": thin})
 
             # Inbound text updates
             r = await client.get(f"{SUPA}/rest/v1/message_log", headers=headers, params={

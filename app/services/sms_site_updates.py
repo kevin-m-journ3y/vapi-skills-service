@@ -344,10 +344,18 @@ async def _finalize(client, *, tenant_id, user_id, signon, finish_hhmm, tz) -> s
 
     site = signon.get("site_name") or "your site"
     if incomplete:
-        return (f"Saved to {site} ✅ — but the finish time looked off, so I've left hours "
-                f"for your manager to confirm. Reply with your finish time to fix.")
-    return (f"Saved to {site}, {_fmt_12h(start_hhmm)}–{_fmt_12h(finish_hhmm)} "
-            f"({hours:g}h) ✅. Reply WRONG if that's not right.")
+        return {"reply": (f"Saved to {site} ✅ — but the finish time looked off, so I've left "
+                          f"hours for your manager to confirm. Reply with your finish time to fix."),
+                "ts_id": ts_id, "needs_detail": False}
+    if not notes:
+        # No substantive detail was captured today — save the hours, then ask for
+        # a one-line description so the client has usable data (not just a time).
+        return {"reply": (f"Logged {hours:g}h at {site} ✅. Quick one — what did you focus on "
+                          f"today? A line is plenty (e.g. \"poured slab, formwork for stage 2\")."),
+                "ts_id": ts_id, "needs_detail": True}
+    return {"reply": (f"Saved to {site}, {_fmt_12h(start_hhmm)}–{_fmt_12h(finish_hhmm)} "
+                      f"({hours:g}h) ✅. Reply WRONG if that's not right."),
+            "ts_id": ts_id, "needs_detail": False}
 
 
 # ---------------------------------------------------------------------------
@@ -398,8 +406,35 @@ async def process_inbound(client: httpx.AsyncClient, *, tenant_cfg: dict, user: 
         await _stamp_message(client, message_log_id, site_id=signon["site_id"],
                              signon_id=signon["id"], category="finish")
         await _clear_pending(client, tenant_id, from_number)
-        return await _finalize(client, tenant_id=tenant_id, user_id=user_id,
-                               signon=signon, finish_hhmm=finish, tz=tz)
+        res = await _finalize(client, tenant_id=tenant_id, user_id=user_id,
+                              signon=signon, finish_hhmm=finish, tz=tz)
+        if res.get("needs_detail"):
+            await _set_pending(client, tenant_id, from_number, user_id, "awaiting_detail",
+                               {"timesheet_id": res["ts_id"], "site_name": signon.get("site_name"),
+                                "site_id": signon.get("site_id"), "signon_id": signon["id"]})
+        return res["reply"]
+
+    if pending and pending["state"] == "awaiting_detail":
+        # We finalized a shift with no description and asked what they focused on.
+        # Their reply becomes the work_description (STOP/HELP already handled above).
+        payload = pending.get("payload") or {}
+        site = payload.get("site_name") or "your site"
+        if _is_photo_keyword(body) and payload.get("signon_id"):
+            # Honour a photo request but keep waiting for the detail line.
+            return (f"📷 Add photos for {site}:\n{photo_link(payload['signon_id'])}\n\n"
+                    f"And a quick line on what you focused on today?")
+        detail = (body or "").strip()
+        await _clear_pending(client, tenant_id, from_number)
+        ts_id = payload.get("timesheet_id")
+        if ts_id and detail:
+            await client.patch(f"{_url()}/rest/v1/timesheets",
+                               headers={**_headers(), "Prefer": "return=minimal"},
+                               params={"id": f"eq.{ts_id}"},
+                               json={"work_description": detail})
+            await _stamp_message(client, message_log_id, site_id=payload.get("site_id"),
+                                 category="detail")
+            return f"Perfect — added to your {site} log ✅. Thanks!"
+        return f"No worries — reply any time with what you focused on at {site}."
 
     signons = await _active_signons(client, user_id)
 
@@ -453,8 +488,13 @@ async def process_inbound(client: httpx.AsyncClient, *, tenant_cfg: dict, user: 
     if done and finish:
         await _stamp_message(client, message_log_id, site_id=signon["site_id"],
                              signon_id=signon["id"], category="finish")
-        return await _finalize(client, tenant_id=tenant_id, user_id=user_id,
-                               signon=signon, finish_hhmm=finish, tz=tz)
+        res = await _finalize(client, tenant_id=tenant_id, user_id=user_id,
+                              signon=signon, finish_hhmm=finish, tz=tz)
+        if res.get("needs_detail"):
+            await _set_pending(client, tenant_id, from_number, user_id, "awaiting_detail",
+                               {"timesheet_id": res["ts_id"], "site_name": signon.get("site_name"),
+                                "site_id": signon.get("site_id"), "signon_id": signon["id"]})
+        return res["reply"]
 
     if done and not finish:
         # "done" but no time — record as a note, then ask for the time.

@@ -81,6 +81,7 @@
                                         <span x-show="ev.channel === 'sms'" class="badge badge-info badge-xs">SMS</span>
                                         <span x-show="ev.channel === 'voice'" class="badge badge-secondary badge-xs">Voice</span>
                                         <span x-show="ev.is_issue" class="badge badge-error badge-xs">Issue</span>
+                                        <span x-show="ev.thin" class="badge badge-warning badge-xs">⚠ No detail</span>
                                     </div>
                                     <p x-show="ev.detail" class="text-sm text-base-content/80 mt-0.5 whitespace-pre-wrap" x-text="ev.detail"></p>
                                     <template x-if="ev.type === 'photo' && ev.media_urls && ev.media_urls.length">

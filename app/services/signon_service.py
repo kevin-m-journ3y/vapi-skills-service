@@ -242,9 +242,9 @@ async def send_signon_confirmation(user_id: str, tenant_id: str, site_name: str,
                     tlabel = ""
             when = f", {tlabel}" if tlabel else ""
 
-            body = (f"You're signed on at {site_name}{when}. "
-                    f"Reply here with an update or your finish time, or reply PHOTO "
-                    f"for a photo-upload link. Or call this number to talk to Jill.")
+            body = (f"You're signed on at {site_name}{when}. Text what you're working on "
+                    f"through the day, then your finish time when you're done. Reply PHOTO "
+                    f"for a photo link, or call this number to talk to Jill.")
             result = await send_sms(to_number=to_number, message=body, from_number=from_number)
             await client.post(
                 f"{_url()}/rest/v1/message_log",

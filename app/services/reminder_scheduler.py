@@ -205,7 +205,7 @@ async def _send_reminders_for_tenant(
                 call_part = f", or call {jill_phone} to talk to Jill" if jill_phone else ""
                 message = (
                     f"Hey {name}, you still have timesheet entries to log for today. "
-                    f"Reply to this text with your update{call_part}."
+                    f"Reply with what you did and your finish time{call_part}."
                 )
             elif jill_phone:
                 message = (
