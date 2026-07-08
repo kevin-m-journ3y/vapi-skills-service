@@ -13,7 +13,12 @@ from app.services.signon_service import (
     identify_user_by_phone,
     record_signon,
 )
-from app.services.photo_upload import verify_photo_token, get_signon, store_uploaded_photo
+from app.services.photo_upload import (
+    verify_photo_token,
+    get_signon,
+    store_uploaded_photo,
+    send_photo_confirmation,
+)
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -252,4 +257,6 @@ async def photo_upload_submit(token: str, files: list[UploadFile] = File(default
                 continue
             if await store_uploaded_photo(client, signon, data, ctype, caption=caption):
                 count += 1
+        if count:
+            await send_photo_confirmation(client, signon, count)
     return JSONResponse({"success": True, "count": count})

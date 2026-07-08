@@ -14,6 +14,7 @@ import httpx
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 from app.config import settings
+from app.services.twilio_service import send_sms
 
 logger = logging.getLogger(__name__)
 
@@ -97,3 +98,43 @@ async def store_uploaded_photo(client: httpx.AsyncClient, signon: dict, file_byt
               "caption": caption, "source": "web_upload"},
     )
     return True
+
+
+async def send_photo_confirmation(client: httpx.AsyncClient, signon: dict, count: int) -> None:
+    """Text the worker back confirming N photos landed against their site.
+
+    Closes the loop after a web upload: the page shows a visual '✅ added', this
+    puts a durable confirmation (with the site name) in their message thread.
+    Best-effort — never raises into the upload response.
+    """
+    if count <= 0:
+        return
+    tenant_id = signon.get("tenant_id")
+    user_id = signon.get("user_id")
+    site_name = signon.get("site_name") or "your site"
+    try:
+        to_number = None
+        if user_id:
+            r = await client.get(f"{_url()}/rest/v1/users", headers=_headers(),
+                                  params={"id": f"eq.{user_id}", "select": "phone_number"})
+            rows = r.json() if r.status_code == 200 else []
+            to_number = rows[0].get("phone_number") if rows else None
+        r = await client.get(f"{_url()}/rest/v1/qr_signon_config", headers=_headers(),
+                             params={"tenant_id": f"eq.{tenant_id}", "select": "twilio_from_number"})
+        rows = r.json() if r.status_code == 200 else []
+        from_number = rows[0].get("twilio_from_number") if rows else None
+        if not to_number or not from_number:
+            logger.info("Photo confirmation skipped (missing number): to=%s from=%s", to_number, from_number)
+            return
+        body = f"📷 {count} photo{'s' if count != 1 else ''} added to {site_name} ✅"
+        result = await send_sms(to_number=to_number, message=body, from_number=from_number)
+        await client.post(
+            f"{_url()}/rest/v1/message_log",
+            headers={**_headers(), "Content-Type": "application/json", "Prefer": "return=minimal"},
+            json={"tenant_id": tenant_id, "user_id": user_id, "direction": "outbound",
+                  "channel": "sms", "from_number": from_number, "to_number": to_number,
+                  "body": body, "twilio_message_sid": result.get("sid") if result.get("success") else None,
+                  "status": "sent" if result.get("success") else "failed"},
+        )
+    except Exception as e:
+        logger.warning("Photo confirmation SMS failed: %s", e)
