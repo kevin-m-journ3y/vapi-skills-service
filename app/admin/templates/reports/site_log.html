@@ -1,0 +1,154 @@
+{% extends "layouts/base.html" %}
+{% block title %}Site Log{% endblock %}
+{% block content %}
+<div x-data="siteLogReport()" x-init="init()">
+    <!-- Toast -->
+    <div x-show="toast.show" x-transition class="toast toast-top toast-end z-50" x-cloak>
+        <div class="alert" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'">
+            <span x-text="toast.message"></span>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <div class="mb-6">
+        <h1 class="text-3xl font-bold">Site Log</h1>
+        <p class="text-base-content/70 mt-1">Everything that happened at a site, day by day — timesheets, text updates, photos, sign-ons and more.</p>
+    </div>
+
+    <!-- Tenant switcher (super admin only) — standalone, matches other reports -->
+    <template x-if="currentUser?.role === 'super_admin'">
+        <div class="mb-4">
+            <select class="select select-bordered w-full max-w-xs" x-model="selectedTenantId" @change="onTenantChange()">
+                <option value="">Select Tenant</option>
+                <template x-for="t in availableTenants" :key="t.id"><option :value="t.id" x-text="t.name"></option></template>
+            </select>
+        </div>
+    </template>
+
+    <!-- Filters -->
+    <div class="card bg-base-100 shadow mb-6">
+        <div class="card-body py-4">
+            <div class="flex flex-wrap gap-3 items-end">
+                <div>
+                    <label class="label py-1"><span class="label-text text-xs">Site</span></label>
+                    <select class="select select-bordered select-sm" x-model="selectedSiteId" @change="loadData()">
+                        <option value="">Select site</option>
+                        <template x-for="s in availableSites" :key="s.id"><option :value="s.id" x-text="s.name"></option></template>
+                    </select>
+                </div>
+                <div>
+                    <label class="label py-1"><span class="label-text text-xs">From</span></label>
+                    <input type="date" class="input input-bordered input-sm" x-model="startDate" @change="loadData()" />
+                </div>
+                <div>
+                    <label class="label py-1"><span class="label-text text-xs">To</span></label>
+                    <input type="date" class="input input-bordered input-sm" x-model="endDate" @change="loadData()" />
+                </div>
+                <button class="btn btn-primary btn-sm" @click="loadData()">Refresh</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading -->
+    <div x-show="loading" class="flex justify-center py-12"><span class="loading loading-spinner loading-lg"></span></div>
+
+    <!-- Empty states -->
+    <div x-show="!loading && !selectedSiteId" class="text-center py-12 text-base-content/50">Select a site to view its log.</div>
+    <div x-show="!loading && selectedSiteId && data && data.days.length === 0" class="text-center py-12 text-base-content/50">
+        No activity for this site in the selected range.
+    </div>
+
+    <!-- Timeline -->
+    <div x-show="!loading && data && data.days.length > 0" class="space-y-6">
+        <template x-for="day in data.days" :key="day.date">
+            <div>
+                <div class="flex items-center gap-3 mb-3 sticky top-0 bg-base-200/80 backdrop-blur py-2 z-10">
+                    <h2 class="text-lg font-bold" x-text="day.date_label"></h2>
+                    <span class="badge badge-ghost badge-sm" x-text="day.events.length + ' event' + (day.events.length === 1 ? '' : 's')"></span>
+                </div>
+                <div class="space-y-2">
+                    <template x-for="(ev, i) in day.events" :key="i">
+                        <div class="card bg-base-100 shadow-sm">
+                            <div class="card-body py-3 flex-row items-start gap-3">
+                                <div class="text-xs text-base-content/50 w-16 shrink-0 pt-1" x-text="ev.time_label || ''"></div>
+                                <div class="shrink-0 pt-0.5">
+                                    <span class="badge badge-sm" :class="badgeClass(ev.type)" x-text="typeLabel(ev.type)"></span>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        <span class="font-medium" x-text="ev.user"></span>
+                                        <span x-show="ev.meta" class="text-sm text-base-content/60" x-text="ev.meta"></span>
+                                        <span x-show="ev.channel === 'sms'" class="badge badge-info badge-xs">SMS</span>
+                                        <span x-show="ev.is_issue" class="badge badge-error badge-xs">Issue</span>
+                                    </div>
+                                    <p x-show="ev.detail" class="text-sm text-base-content/80 mt-0.5 whitespace-pre-wrap" x-text="ev.detail"></p>
+                                    <template x-if="ev.type === 'photo' && ev.media_url">
+                                        <a :href="ev.media_url" target="_blank">
+                                            <img :src="ev.media_url" class="mt-2 rounded-lg max-h-48 border border-base-300" loading="lazy" />
+                                        </a>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </template>
+    </div>
+</div>
+
+<script>
+function siteLogReport() {
+    return {
+        currentUser: null, availableTenants: [], availableSites: [],
+        selectedTenantId: '', selectedSiteId: '', startDate: '', endDate: '',
+        data: null, loading: false, toast: { show: false, message: '', type: 'success' },
+
+        async init() {
+            const today = new Date(); const past = new Date(); past.setDate(today.getDate() - 30);
+            this.endDate = today.toISOString().slice(0, 10);
+            this.startDate = past.toISOString().slice(0, 10);
+            try {
+                const r = await fetch('/admin/auth/me', { credentials: 'same-origin' });
+                if (r.ok) { const d = await r.json(); this.currentUser = d.user;
+                    if (this.currentUser?.tenant_id) this.selectedTenantId = this.currentUser.tenant_id; }
+            } catch (e) {}
+            if (this.currentUser?.role === 'super_admin') await this.loadTenants();
+            if (this.selectedTenantId) await this.loadSites();
+        },
+        async loadTenants() {
+            try { const r = await fetch('/admin/tenants/data', { credentials: 'same-origin' });
+                if (r.ok) { const d = await r.json(); if (d.success) this.availableTenants = d.tenants || []; } } catch (e) {}
+        },
+        async onTenantChange() {
+            this.selectedSiteId = ''; this.availableSites = []; this.data = null;
+            if (this.selectedTenantId) await this.loadSites();
+        },
+        async loadSites() {
+            if (!this.selectedTenantId) return;
+            try {
+                let url = '/admin/sites/data';
+                if (this.currentUser?.role === 'super_admin') url += '?tenant_id=' + this.selectedTenantId;
+                const r = await fetch(url, { credentials: 'same-origin' });
+                if (r.ok) { const d = await r.json(); if (d.success) this.availableSites = d.sites || []; }
+            } catch (e) {}
+        },
+        async loadData() {
+            if (!this.selectedSiteId) { this.data = null; return; }
+            this.loading = true;
+            try {
+                let url = `/admin/reports/site-log/data?site_id=${this.selectedSiteId}&start_date=${this.startDate}&end_date=${this.endDate}`;
+                if (this.currentUser?.role === 'super_admin' && this.selectedTenantId) url += '&tenant_id=' + this.selectedTenantId;
+                const r = await fetch(url, { credentials: 'same-origin' });
+                const d = await r.json();
+                if (d.success) this.data = d; else this.showToast(d.error || 'Failed to load', 'error');
+            } catch (e) { this.showToast('Error loading data', 'error'); }
+            this.loading = false;
+        },
+        typeLabel(t) { return { timesheet: 'Timesheet', text: 'Text', photo: 'Photo', signon: 'Sign-on', voice_note: 'Voice', site_update: 'Site update', note: 'Note' }[t] || t; },
+        badgeClass(t) { return { timesheet: 'badge-primary', text: 'badge-info', photo: 'badge-secondary', signon: 'badge-ghost', voice_note: 'badge-accent', site_update: 'badge-warning', note: 'badge-ghost' }[t] || 'badge-ghost'; },
+        showToast(m, type = 'success') { this.toast = { show: true, message: m, type }; setTimeout(() => this.toast.show = false, 3000); }
+    };
+}
+</script>
+{% endblock %}

@@ -2617,6 +2617,7 @@ REPORT_TYPES = {
     "payroll_weekly": "Weekly Payroll Summary",
     "site_weekly": "Site Weekly Report",
     "site_progress": "Site Progress Report",
+    "site_log": "Site Log",
 }
 
 @router.get("/admin/tenants/{tenant_id}/reports")
@@ -2787,6 +2788,216 @@ async def site_progress_report_page(request: Request):
         "reports/site_progress.html",
         {"request": request, "page_title": "Site Progress Report"}
     )
+
+
+@router.get("/admin/reports/site-log", response_class=HTMLResponse)
+async def site_log_report_page(request: Request):
+    """Site Log report page — per-site, scrollable daily timeline."""
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
+    return templates.TemplateResponse(
+        "reports/site_log.html",
+        {"request": request, "page_title": "Site Log"}
+    )
+
+
+@router.get("/admin/reports/site-log/data")
+async def get_site_log_data(
+    request: Request,
+    site_id: str = "",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+):
+    """Per-(site, day) timeline unioning timesheets, text updates, photos,
+    sign-ons, voice notes, site updates, and site notes."""
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        tenant_id = user_session.get("tenant_id")
+    if not tenant_id:
+        return {"success": False, "error": "Please select a tenant"}
+    if not site_id:
+        return {"success": False, "error": "Please select a site"}
+
+    from datetime import datetime as _dt, timedelta as _td
+    from zoneinfo import ZoneInfo
+
+    SUPA = os.getenv("SUPABASE_URL")
+    headers = {
+        "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+        "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+    }
+    if not end_date:
+        end_date = _dt.utcnow().strftime("%Y-%m-%d")
+    if not start_date:
+        start_date = (_dt.utcnow() - _td(days=30)).strftime("%Y-%m-%d")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            tz_resp = await client.get(
+                f"{SUPA}/rest/v1/tenants", headers=headers,
+                params={"id": f"eq.{tenant_id}", "select": "timezone"})
+            tzname = "Australia/Sydney"
+            if tz_resp.status_code == 200 and tz_resp.json():
+                tzname = tz_resp.json()[0].get("timezone") or tzname
+            try:
+                tz = ZoneInfo(tzname)
+            except Exception:
+                tz = ZoneInfo("Australia/Sydney")
+            utc = ZoneInfo("UTC")
+            start_utc = _dt.strptime(start_date + " 00:00:00", "%Y-%m-%d %H:%M:%S").replace(tzinfo=tz).astimezone(utc).isoformat()
+            end_utc = _dt.strptime(end_date + " 23:59:59", "%Y-%m-%d %H:%M:%S").replace(tzinfo=tz).astimezone(utc).isoformat()
+
+            def loc(iso_ts):
+                """timestamptz -> (day_str, time_label, sort_key) in tenant tz.
+                Robust to varying fractional-second digits / short +00 offsets
+                (py3.9 fromisoformat is strict and would otherwise drop events)."""
+                import re as _re
+                try:
+                    s = (iso_ts or "").strip().replace(" ", "T").replace("Z", "+00:00")
+                    mtz = _re.search(r"([+-]\d{2}):?(\d{2})?$", s)
+                    if mtz:
+                        base = s[:mtz.start()]
+                        tzs = f"{mtz.group(1)}:{mtz.group(2) or '00'}"
+                    else:
+                        base, tzs = s, "+00:00"
+                    if "." in base:
+                        head, frac = base.split(".", 1)
+                        base = f"{head}.{(frac + '000000')[:6]}"
+                    d = _dt.fromisoformat(f"{base}{tzs}").astimezone(tz)
+                    return d.date().isoformat(), d.strftime("%I:%M%p").lstrip("0").lower(), d.isoformat()
+                except Exception:
+                    return None, "", iso_ts or ""
+
+            events = []
+            uids = set()
+            base = {"site_id": f"eq.{site_id}", "tenant_id": f"eq.{tenant_id}", "limit": "2000"}
+
+            ent = await client.get(f"{SUPA}/rest/v1/entities", headers=headers,
+                                   params={"id": f"eq.{site_id}", "select": "name"})
+            site_name = ent.json()[0]["name"] if ent.status_code == 200 and ent.json() else ""
+
+            # Timesheets (by work_date)
+            r = await client.get(f"{SUPA}/rest/v1/timesheets", headers=headers, params={
+                **base, "and": f"(work_date.gte.{start_date},work_date.lte.{end_date})",
+                "select": "user_id,work_date,start_time,end_time,hours_worked,work_description,vapi_call_id"})
+            for t in (r.json() if r.status_code == 200 else []):
+                uids.add(t.get("user_id"))
+                st = (t.get("start_time") or "")[:5]; en = (t.get("end_time") or "")[:5]
+                meta = []
+                if st or en: meta.append(f"{st or '?'}–{en or '?'}")
+                if t.get("hours_worked") is not None: meta.append(f"{t['hours_worked']}h")
+                events.append({"type": "timesheet", "day": t.get("work_date"),
+                               "sort": f"{t.get('work_date')}T{(t.get('start_time') or '00:00')}",
+                               "time_label": st, "user_id": t.get("user_id"), "title": "Timesheet",
+                               "detail": t.get("work_description") or "", "meta": " · ".join(meta),
+                               "channel": "sms" if not t.get("vapi_call_id") else "voice"})
+
+            # Inbound text updates
+            r = await client.get(f"{SUPA}/rest/v1/message_log", headers=headers, params={
+                **base, "direction": "eq.inbound", "category": "in.(note,finish)",
+                "and": f"(created_at.gte.{start_utc},created_at.lte.{end_utc})",
+                "select": "user_id,created_at,body,channel"})
+            for m in (r.json() if r.status_code == 200 else []):
+                uids.add(m.get("user_id"))
+                day, tl, sk = loc(m.get("created_at"))
+                events.append({"type": "text", "day": day, "sort": sk, "time_label": tl,
+                               "user_id": m.get("user_id"), "title": "Text update",
+                               "detail": m.get("body") or "", "meta": "", "channel": "sms"})
+
+            # Photos (MMS)
+            r = await client.get(f"{SUPA}/rest/v1/timesheet_media", headers=headers, params={
+                **base, "and": f"(created_at.gte.{start_utc},created_at.lte.{end_utc})",
+                "select": "user_id,created_at,media_url,content_type,caption"})
+            for p in (r.json() if r.status_code == 200 else []):
+                uids.add(p.get("user_id"))
+                day, tl, sk = loc(p.get("created_at"))
+                events.append({"type": "photo", "day": day, "sort": sk, "time_label": tl,
+                               "user_id": p.get("user_id"), "title": "Photo",
+                               "detail": p.get("caption") or "", "meta": "", "media_url": p.get("media_url")})
+
+            # Sign-ons
+            r = await client.get(f"{SUPA}/rest/v1/site_signons", headers=headers, params={
+                **base, "and": f"(signed_on_at.gte.{start_utc},signed_on_at.lte.{end_utc})",
+                "select": "user_id,signed_on_at,signed_off_at,status,signoff_method"})
+            for s in (r.json() if r.status_code == 200 else []):
+                uids.add(s.get("user_id"))
+                day, tl, sk = loc(s.get("signed_on_at"))
+                off = ""
+                if s.get("signed_off_at"):
+                    _, otl, _ = loc(s.get("signed_off_at"))
+                    off = f" → off {otl}"
+                events.append({"type": "signon", "day": day, "sort": sk, "time_label": tl,
+                               "user_id": s.get("user_id"), "title": "Sign-on", "detail": "",
+                               "meta": f"on site{off}"})
+
+            # Voice notes
+            r = await client.get(f"{SUPA}/rest/v1/voice_notes", headers=headers, params={
+                **base, "and": f"(created_at.gte.{start_utc},created_at.lte.{end_utc})",
+                "select": "user_id,created_at,note_content,note_summary"})
+            for v in (r.json() if r.status_code == 200 else []):
+                uids.add(v.get("user_id"))
+                day, tl, sk = loc(v.get("created_at"))
+                events.append({"type": "voice_note", "day": day, "sort": sk, "time_label": tl,
+                               "user_id": v.get("user_id"), "title": "Voice note",
+                               "detail": v.get("note_summary") or v.get("note_content") or "", "meta": ""})
+
+            # Site progress updates
+            r = await client.get(f"{SUPA}/rest/v1/site_progress_updates", headers=headers, params={
+                **base, "and": f"(created_at.gte.{start_utc},created_at.lte.{end_utc})",
+                "select": "user_id,created_at,update_date,main_focus,summary_brief,has_urgent_issues,has_safety_concerns"})
+            for sp in (r.json() if r.status_code == 200 else []):
+                uids.add(sp.get("user_id"))
+                day, tl, sk = loc(sp.get("created_at"))
+                if sp.get("update_date"): day = sp["update_date"]
+                events.append({"type": "site_update", "day": day, "sort": sk, "time_label": tl,
+                               "user_id": sp.get("user_id"), "title": "Site update",
+                               "detail": sp.get("summary_brief") or sp.get("main_focus") or "", "meta": "",
+                               "is_issue": bool(sp.get("has_urgent_issues") or sp.get("has_safety_concerns"))})
+
+            # Site notes (admin-entered)
+            r = await client.get(f"{SUPA}/rest/v1/site_notes", headers=headers, params={
+                **base, "and": f"(created_at.gte.{start_utc},created_at.lte.{end_utc})",
+                "select": "created_at,note_date,note_text,is_issue,is_resolved"})
+            for n in (r.json() if r.status_code == 200 else []):
+                day, tl, sk = loc(n.get("created_at"))
+                if n.get("note_date"): day = n["note_date"]
+                events.append({"type": "note", "day": day, "sort": sk, "time_label": tl,
+                               "user_id": None, "title": "Site note", "detail": n.get("note_text") or "",
+                               "meta": "", "is_issue": bool(n.get("is_issue")), "is_resolved": bool(n.get("is_resolved"))})
+
+            # Enrich user names
+            uid_list = [u for u in uids if u]
+            umap = {}
+            if uid_list:
+                ur = await client.get(f"{SUPA}/rest/v1/users", headers=headers,
+                                      params={"id": f"in.({','.join(uid_list)})", "select": "id,name"})
+                if ur.status_code == 200:
+                    umap = {u["id"]: u["name"] for u in ur.json()}
+            for e in events:
+                e["user"] = umap.get(e.get("user_id"), "Admin" if e["type"] == "note" else "Unknown")
+
+            # Group by day, newest first; events within a day ascending by time
+            grouped = {}
+            for e in events:
+                if e.get("day"):
+                    grouped.setdefault(e["day"], []).append(e)
+            day_list = []
+            for d in sorted(grouped.keys(), reverse=True):
+                evs = sorted(grouped[d], key=lambda x: x.get("sort") or "")
+                try:
+                    label = _dt.strptime(d, "%Y-%m-%d").strftime("%a %d %b %Y")
+                except Exception:
+                    label = d
+                day_list.append({"date": d, "date_label": label, "events": evs})
+
+            return {"success": True, "site_name": site_name, "days": day_list,
+                    "start_date": start_date, "end_date": end_date, "total_events": len(events)}
+
+    except Exception as e:
+        logger.error(f"Error building site log: {e}")
+        return {"success": False, "error": str(e)}
 
 
 @router.get("/admin/reports/enabled")
@@ -4295,24 +4506,41 @@ async def preview_billing(
             start_utc = tz.localize(dt_cls.strptime(f"{start_date} 00:00:00", "%Y-%m-%d %H:%M:%S")).astimezone(pytz_mod.utc).isoformat()
             end_utc = tz.localize(dt_cls.strptime(f"{end_date} 23:59:59", "%Y-%m-%d %H:%M:%S")).astimezone(pytz_mod.utc).isoformat()
 
-            # 2. Get calls from call_quality_assessments
-            calls_resp = await client.get(
-                f"{os.getenv('SUPABASE_URL')}/rest/v1/call_quality_assessments",
-                headers=headers,
-                params={
-                    "tenant_id": f"eq.{tenant_id}",
-                    "call_type": "neq.greeter",
-                    "and": f"(call_started_at.gte.{start_utc},call_started_at.lte.{end_utc})",
-                    "select": "vapi_call_id,user_id,call_type,call_duration_seconds,call_cost,call_started_at,caller_phone,success_evaluation,task_completed",
-                    "order": "call_started_at.asc",
-                    "limit": "10000"
-                }
-            )
-
-            if calls_resp.status_code != 200:
-                return {"success": False, "error": "Failed to fetch call data"}
-
-            all_calls = calls_resp.json()
+            # 2. Fetch billable ARTIFACTS directly (channel-agnostic). Each
+            # timesheet / voice note / site update is one billable item, whether
+            # logged by voice (has vapi_call_id) or SMS (vapi_call_id null).
+            # Replaces the old "bill every call >=30s" model. See migration 019.
+            artifact_specs = [
+                ("timesheets", "timesheet", "timesheet"),
+                ("voice_notes", "voice_note", "voice_notes"),
+                ("site_progress_updates", "site_update", "site_updates"),
+            ]
+            artifacts = []
+            for table, atype, type_key in artifact_specs:
+                a_resp = await client.get(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/{table}",
+                    headers=headers,
+                    params={
+                        "tenant_id": f"eq.{tenant_id}",
+                        "and": f"(created_at.gte.{start_utc},created_at.lte.{end_utc})",
+                        "select": "id,vapi_call_id,user_id,site_id,created_at",
+                        "order": "created_at.asc",
+                        "limit": "10000",
+                    },
+                )
+                if a_resp.status_code != 200:
+                    return {"success": False, "error": f"Failed to fetch {table}"}
+                for row in a_resp.json():
+                    artifacts.append({
+                        "artifact_id": row["id"],
+                        "artifact_type": atype,
+                        "type_key": type_key,
+                        "vapi_call_id": row.get("vapi_call_id"),
+                        "user_id": row.get("user_id"),
+                        "site_id": row.get("site_id"),
+                        "created_at": row.get("created_at"),
+                        "channel": "voice" if row.get("vapi_call_id") else "sms",
+                    })
 
             # 3. Enrich with VAPI API data (duration + cost)
             # CQA table often has null duration/cost, so fetch from VAPI API
@@ -4352,29 +4580,18 @@ async def preview_billing(
                 except Exception as e:
                     logger.warning(f"Could not fetch VAPI call data: {e}")
 
-            # Filter billable calls: duration >= 30s
-            min_duration_seconds = 30
-            billable_calls = []
-
-            for c in all_calls:
-                vapi_call_id = c.get("vapi_call_id", "")
-                vapi_info = vapi_data_cache.get(vapi_call_id, {})
-
-                # Use VAPI API duration first, fall back to CQA
-                duration = vapi_info.get("duration", 0) or int(c.get("call_duration_seconds") or 0)
-                if duration < min_duration_seconds:
-                    continue
-
-                vapi_cost_usd = vapi_info.get("cost", 0) or float(c.get("call_cost") or 0)
-                vapi_cost_aud = vapi_cost_usd * usd_to_aud
-
-                c["call_duration_seconds"] = duration
-                c["actual_cost_usd"] = round(vapi_cost_usd, 4)
-                c["actual_cost_aud"] = round(vapi_cost_aud, 4)
-                billable_calls.append(c)
+            # 3b. Apply VAPI cost/duration to voice artifacts. SMS artifacts have
+            # no call -> no VAPI cost and no duration.
+            for a in artifacts:
+                vcid = a.get("vapi_call_id") or ""
+                vinfo = vapi_data_cache.get(vcid, {}) if vcid else {}
+                cost_usd = float(vinfo.get("cost", 0) or 0)
+                a["actual_cost_usd"] = round(cost_usd, 4)
+                a["actual_cost_aud"] = round(cost_usd * usd_to_aud, 4)
+                a["duration_seconds"] = int(vinfo.get("duration", 0) or 0)
 
             # 4. Enrich with user names
-            user_ids = list(set(c.get("user_id") for c in billable_calls if c.get("user_id")))
+            user_ids = list(set(a.get("user_id") for a in artifacts if a.get("user_id")))
             user_map = {}
             if user_ids:
                 for i in range(0, len(user_ids), 50):
@@ -4382,90 +4599,34 @@ async def preview_billing(
                     user_resp = await client.get(
                         f"{os.getenv('SUPABASE_URL')}/rest/v1/users",
                         headers=headers,
-                        params={
-                            "id": f"in.({','.join(batch)})",
-                            "select": "id,name"
-                        }
+                        params={"id": f"in.({','.join(batch)})", "select": "id,name"},
                     )
                     if user_resp.status_code == 200:
                         for u in user_resp.json():
                             user_map[u["id"]] = u["name"]
 
-            # 5. Enrich with site names + completion status (via skill tables)
-            vapi_ids = [c["vapi_call_id"] for c in billable_calls if c.get("vapi_call_id")]
-            site_map = {}  # vapi_call_id -> site_name
-            completed_calls = set()  # vapi_call_ids where the skill objective was met
-
-            if vapi_ids:
-                # Timesheets — check for saved entries (proof of completion)
-                for i in range(0, len(vapi_ids), 50):
-                    batch = vapi_ids[i:i+50]
-                    ts_resp = await client.get(
-                        f"{os.getenv('SUPABASE_URL')}/rest/v1/timesheets",
+            # 5. Enrich with site names
+            site_ids = list(set(a.get("site_id") for a in artifacts if a.get("site_id")))
+            site_map = {}  # site_id -> site_name
+            if site_ids:
+                for i in range(0, len(site_ids), 50):
+                    batch = site_ids[i:i+50]
+                    ent_resp = await client.get(
+                        f"{os.getenv('SUPABASE_URL')}/rest/v1/entities",
                         headers=headers,
-                        params={
-                            "vapi_call_id": f"in.({','.join(batch)})",
-                            "select": "vapi_call_id,site_id"
-                        }
+                        params={"id": f"in.({','.join(batch)})", "select": "id,name"},
                     )
-                    if ts_resp.status_code == 200:
-                        site_ids_needed = set()
-                        ts_site_map = {}
-                        for ts in ts_resp.json():
-                            completed_calls.add(ts["vapi_call_id"])
-                            if ts.get("site_id"):
-                                site_ids_needed.add(ts["site_id"])
-                                ts_site_map[ts["vapi_call_id"]] = ts["site_id"]
+                    if ent_resp.status_code == 200:
+                        for e in ent_resp.json():
+                            site_map[e["id"]] = e["name"]
 
-                        if site_ids_needed:
-                            ent_resp = await client.get(
-                                f"{os.getenv('SUPABASE_URL')}/rest/v1/entities",
-                                headers=headers,
-                                params={
-                                    "id": f"in.({','.join(site_ids_needed)})",
-                                    "select": "id,name"
-                                }
-                            )
-                            if ent_resp.status_code == 200:
-                                entity_names = {e["id"]: e["name"] for e in ent_resp.json()}
-                                for vcid, sid in ts_site_map.items():
-                                    site_map[vcid] = entity_names.get(sid, "")
-
-                # Voice notes — check for saved entries
-                for i in range(0, len(vapi_ids), 50):
-                    batch = vapi_ids[i:i+50]
-                    vn_resp = await client.get(
-                        f"{os.getenv('SUPABASE_URL')}/rest/v1/voice_notes",
-                        headers=headers,
-                        params={
-                            "vapi_call_id": f"in.({','.join(batch)})",
-                            "select": "vapi_call_id"
-                        }
-                    )
-                    if vn_resp.status_code == 200:
-                        for vn in vn_resp.json():
-                            completed_calls.add(vn["vapi_call_id"])
-
-                # Site progress updates — check for saved entries
-                for i in range(0, len(vapi_ids), 50):
-                    batch = vapi_ids[i:i+50]
-                    sp_resp = await client.get(
-                        f"{os.getenv('SUPABASE_URL')}/rest/v1/site_progress_updates",
-                        headers=headers,
-                        params={
-                            "vapi_call_id": f"in.({','.join(batch)})",
-                            "select": "vapi_call_id"
-                        }
-                    )
-                    if sp_resp.status_code == 200:
-                        for sp in sp_resp.json():
-                            completed_calls.add(sp["vapi_call_id"])
-
-            # 6. Build call list with billing rates
+            # 6. Build billable list with per-artifact rates (channel-agnostic).
+            # Legacy cost_per_call_* columns are the per-artifact rates.
             rate_map = {
                 "timesheet": float(config.get("cost_per_call_timesheet") or 1.00),
                 "voice_notes": float(config.get("cost_per_call_voice_notes") or 1.00),
                 "site_updates": float(config.get("cost_per_call_site_updates") or 2.00),
+                "intra_day_update": float(config.get("cost_per_intra_day_update") or 0.00),
             }
 
             calls_list = []
@@ -4473,34 +4634,35 @@ async def preview_billing(
             total_billed = 0
             total_actual_aud = 0
 
-            for c in billable_calls:
-                call_type = c.get("call_type", "unknown")
-                unit_cost = rate_map.get(call_type, 1.00)
-                actual_aud = c.get("actual_cost_aud", 0)
+            for a in artifacts:
+                type_key = a["type_key"]
+                unit_cost = rate_map.get(type_key, 1.00)
+                actual_aud = a.get("actual_cost_aud", 0)
 
-                vapi_cid = c.get("vapi_call_id", "")
-                call_entry = {
-                    "call_date": c.get("call_started_at"),
-                    "user_name": user_map.get(c.get("user_id"), "Unknown"),
-                    "call_type": call_type,
-                    "site_name": site_map.get(vapi_cid, ""),
-                    "duration_seconds": int(c.get("call_duration_seconds") or 0),
+                calls_list.append({
+                    "call_date": a.get("created_at"),
+                    "user_name": user_map.get(a.get("user_id"), "Unknown"),
+                    "call_type": type_key,           # kept for frontend/breakdown labels
+                    "artifact_type": a["artifact_type"],
+                    "artifact_id": a["artifact_id"],
+                    "channel": a["channel"],
+                    "site_name": site_map.get(a.get("site_id"), ""),
+                    "duration_seconds": a.get("duration_seconds", 0),
                     "unit_cost": unit_cost,
-                    "actual_cost_usd": c.get("actual_cost_usd", 0),
+                    "actual_cost_usd": a.get("actual_cost_usd", 0),
                     "actual_cost_aud": actual_aud,
-                    "vapi_call_id": vapi_cid,
-                    "caller_phone": c.get("caller_phone", ""),
+                    "vapi_call_id": a.get("vapi_call_id") or "",
+                    "caller_phone": "",
                     "number_called": jill_phone,
-                    "completed": vapi_cid in completed_calls,
-                }
-                calls_list.append(call_entry)
+                    "completed": True,
+                })
                 total_billed += unit_cost
                 total_actual_aud += actual_aud
 
-                if call_type not in type_breakdown:
-                    type_breakdown[call_type] = {"count": 0, "rate": unit_cost, "subtotal": 0}
-                type_breakdown[call_type]["count"] += 1
-                type_breakdown[call_type]["subtotal"] += unit_cost
+                if type_key not in type_breakdown:
+                    type_breakdown[type_key] = {"count": 0, "rate": unit_cost, "subtotal": 0}
+                type_breakdown[type_key]["count"] += 1
+                type_breakdown[type_key]["subtotal"] += unit_cost
 
             # 7. Platform fee
             platform_fee = float(config.get("platform_fee") or 500.00)
@@ -4567,29 +4729,30 @@ async def generate_invoice(request: Request):
                 "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
             }
 
-            # Check for overlapping invoices (calls already billed)
-            preview_vapi_ids = [c["vapi_call_id"] for c in calls if c.get("vapi_call_id")]
-            if preview_vapi_ids:
+            # Check for overlapping invoices (artifacts already billed).
+            # Dedup by artifact_id, not vapi_call_id (SMS artifacts have no call).
+            preview_artifact_ids = [c["artifact_id"] for c in calls if c.get("artifact_id")]
+            if preview_artifact_ids:
                 already_billed = set()
-                for i in range(0, len(preview_vapi_ids), 50):
-                    batch = preview_vapi_ids[i:i+50]
+                for i in range(0, len(preview_artifact_ids), 50):
+                    batch = preview_artifact_ids[i:i+50]
                     li_resp = await client.get(
                         f"{os.getenv('SUPABASE_URL')}/rest/v1/invoice_line_items",
                         headers=read_headers,
                         params={
-                            "vapi_call_id": f"in.({','.join(batch)})",
-                            "select": "vapi_call_id,invoice_id"
+                            "artifact_id": f"in.({','.join(batch)})",
+                            "select": "artifact_id,invoice_id"
                         }
                     )
                     if li_resp.status_code == 200:
                         for li in li_resp.json():
-                            already_billed.add(li["vapi_call_id"])
+                            already_billed.add(li["artifact_id"])
 
                 if already_billed:
                     overlap_count = len(already_billed)
                     return {
                         "success": False,
-                        "error": f"{overlap_count} call(s) in this period have already been invoiced. Adjust the date range to avoid overlap."
+                        "error": f"{overlap_count} item(s) in this period have already been invoiced. Adjust the date range to avoid overlap."
                     }
             headers = {
                 "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
@@ -4672,12 +4835,15 @@ async def generate_invoice(request: Request):
                         "call_date": c["call_date"],
                         "user_name": c["user_name"],
                         "call_type": c["call_type"],
+                        "artifact_id": c.get("artifact_id"),
+                        "artifact_type": c.get("artifact_type"),
+                        "channel": c.get("channel", "voice"),
                         "site_name": c.get("site_name", ""),
                         "duration_seconds": c["duration_seconds"],
                         "unit_cost": c["unit_cost"],
                         "actual_cost_usd": c.get("actual_cost_usd", 0),
                         "actual_cost_aud": c.get("actual_cost_aud", 0),
-                        "vapi_call_id": c.get("vapi_call_id", ""),
+                        "vapi_call_id": c.get("vapi_call_id") or None,
                     })
 
                 li_headers = {**headers, "Prefer": "return=minimal"}
