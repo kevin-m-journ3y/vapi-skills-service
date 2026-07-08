@@ -8,6 +8,8 @@ from datetime import datetime, date, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from app.services.twilio_service import send_sms
+
 logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
@@ -189,6 +191,70 @@ async def record_signon(
         else:
             logger.error(f"Failed to create sign-on: {resp.status_code} {resp.text}")
             raise Exception(f"Failed to create sign-on: {resp.text}")
+
+
+async def send_signon_confirmation(user_id: str, tenant_id: str, site_name: str,
+                                   signed_on_at: Optional[str],
+                                   tenant_timezone: str = "Australia/Sydney") -> None:
+    """Text the worker a sign-on receipt that also primes the SMS thread.
+
+    Does three jobs in one message: confirms the sign-on (a durable record),
+    puts the site's number in their thread (so replying with updates is
+    frictionless), and states the call-or-text choice. One number handles both
+    voice and SMS, so "call this number" and "reply here" point at the same
+    place.
+
+    Gated on the tenant's inbound-messaging toggle — tenants who haven't
+    enabled Text & Photo Updates get nothing new. Best-effort; never raises.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            cfg = await client.get(
+                f"{_url()}/rest/v1/qr_signon_config", headers=_headers(),
+                params={"tenant_id": f"eq.{tenant_id}",
+                        "select": "inbound_messaging_enabled,twilio_from_number"})
+            row = (cfg.json()[0] if cfg.status_code == 200 and cfg.json() else {})
+            if not row.get("inbound_messaging_enabled"):
+                return
+            from_number = row.get("twilio_from_number")
+            if not from_number:
+                return
+
+            ur = await client.get(
+                f"{_url()}/rest/v1/users", headers=_headers(),
+                params={"id": f"eq.{user_id}", "select": "phone_number"})
+            urows = ur.json() if ur.status_code == 200 else []
+            to_number = urows[0].get("phone_number") if urows else None
+            if not to_number:
+                return
+
+            try:
+                tz = ZoneInfo(tenant_timezone)
+            except Exception:
+                tz = ZoneInfo("Australia/Sydney")
+            tlabel = ""
+            if signed_on_at:
+                try:
+                    dt = datetime.fromisoformat(signed_on_at.replace("Z", "+00:00")).astimezone(tz)
+                    tlabel = dt.strftime("%I:%M%p").lstrip("0").lower()
+                except Exception:
+                    tlabel = ""
+            when = f", {tlabel}" if tlabel else ""
+
+            body = (f"You're signed on at {site_name}{when}. "
+                    f"Reply to this text with a site update or a photo any time, "
+                    f"or call this number to talk to Jill.")
+            result = await send_sms(to_number=to_number, message=body, from_number=from_number)
+            await client.post(
+                f"{_url()}/rest/v1/message_log",
+                headers={**_headers(), "Prefer": "return=minimal"},
+                json={"tenant_id": tenant_id, "user_id": user_id, "direction": "outbound",
+                      "channel": "sms", "from_number": from_number, "to_number": to_number,
+                      "body": body, "twilio_message_sid": result.get("sid") if result.get("success") else None,
+                      "status": "sent" if result.get("success") else "failed"},
+            )
+    except Exception as e:
+        logger.warning("Sign-on confirmation SMS failed: %s", e)
 
 
 async def get_active_signons_for_user(user_id: str, tenant_timezone: str = "Australia/Sydney") -> list:

@@ -8,10 +8,13 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from jinja2 import Environment, FileSystemLoader
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
+from starlette.background import BackgroundTask
+
 from app.services.signon_service import (
     resolve_short_code,
     identify_user_by_phone,
     record_signon,
+    send_signon_confirmation,
 )
 from app.services.photo_upload import (
     verify_photo_token,
@@ -200,6 +203,16 @@ async def do_signon(short_code: str, request: Request):
         })
         # Ensure cookie is set/refreshed
         _set_user_cookie(response, user_id, qr_data["tenant_id"])
+        # Fire the sign-on confirmation SMS after the response (best-effort,
+        # gated on the tenant's inbound-messaging toggle inside the helper).
+        response.background = BackgroundTask(
+            send_signon_confirmation,
+            user_id,
+            qr_data["tenant_id"],
+            qr_data["site_name"],
+            signon.get("signed_on_at"),
+            qr_data.get("tenant_timezone", "Australia/Sydney"),
+        )
         return response
 
     except Exception as e:
