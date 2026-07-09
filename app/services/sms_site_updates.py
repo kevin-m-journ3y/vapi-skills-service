@@ -29,6 +29,7 @@ from typing import Optional
 import httpx
 
 from app.services.photo_upload import photo_link
+from app.services.sms_detail_ai import build_context, next_question
 
 logger = logging.getLogger(__name__)
 
@@ -346,16 +347,39 @@ async def _finalize(client, *, tenant_id, user_id, signon, finish_hhmm, tz) -> s
     if incomplete:
         return {"reply": (f"Saved to {site} ✅ — but the finish time looked off, so I've left "
                           f"hours for your manager to confirm. Reply with your finish time to fix."),
-                "ts_id": ts_id, "needs_detail": False}
+                "ts_id": ts_id, "hours": hours, "needs_detail": False}
     if not notes:
-        # No substantive detail was captured today — save the hours, then ask for
-        # a one-line description so the client has usable data (not just a time).
+        # No substantive detail captured — save the hours, then let Jill ask a
+        # contextual follow-up (orchestrated in process_inbound). This reply is the
+        # deterministic fallback used only if that path can't run.
         return {"reply": (f"Logged {hours:g}h at {site} ✅. Quick one — what did you focus on "
                           f"today? A line is plenty (e.g. \"poured slab, formwork for stage 2\")."),
-                "ts_id": ts_id, "needs_detail": True}
+                "ts_id": ts_id, "hours": hours, "needs_detail": True}
     return {"reply": (f"Saved to {site}, {_fmt_12h(start_hhmm)}–{_fmt_12h(finish_hhmm)} "
                       f"({hours:g}h) ✅. Reply WRONG if that's not right."),
-            "ts_id": ts_id, "needs_detail": False}
+            "ts_id": ts_id, "hours": hours, "needs_detail": False}
+
+
+async def _start_detail_capture(client, *, tenant_id, from_number, user_id, signon,
+                                hours, ts_id, fallback) -> str:
+    """Shift finalized with no description — open a short, Jill-style follow-up
+    seeded with what she knows. Falls back to a plain prompt if AI/context fails."""
+    try:
+        context = await build_context(client, user_id=user_id, signon=signon, hours=hours)
+        q = await next_question(context, [])
+        if not q:
+            return fallback
+        site = context.get("site") or "your site"
+        hours_txt = f"{float(hours):g}h" if hours is not None else "your time"
+        await _set_pending(client, tenant_id, from_number, user_id, "awaiting_detail", {
+            "timesheet_id": ts_id, "site_name": signon.get("site_name"),
+            "site_id": signon.get("site_id"), "signon_id": signon["id"],
+            "context": context, "conversation": [{"q": q, "a": None}], "answers": [],
+        })
+        return f"Logged {hours_txt} at {site} ✅. {q}"
+    except Exception as e:
+        logger.warning("Detail capture start failed: %s", e)
+        return fallback
 
 
 # ---------------------------------------------------------------------------
@@ -409,32 +433,55 @@ async def process_inbound(client: httpx.AsyncClient, *, tenant_cfg: dict, user: 
         res = await _finalize(client, tenant_id=tenant_id, user_id=user_id,
                               signon=signon, finish_hhmm=finish, tz=tz)
         if res.get("needs_detail"):
-            await _set_pending(client, tenant_id, from_number, user_id, "awaiting_detail",
-                               {"timesheet_id": res["ts_id"], "site_name": signon.get("site_name"),
-                                "site_id": signon.get("site_id"), "signon_id": signon["id"]})
+            return await _start_detail_capture(
+                client, tenant_id=tenant_id, from_number=from_number, user_id=user_id,
+                signon=signon, hours=res.get("hours"), ts_id=res["ts_id"], fallback=res["reply"])
         return res["reply"]
 
     if pending and pending["state"] == "awaiting_detail":
-        # We finalized a shift with no description and asked what they focused on.
-        # Their reply becomes the work_description (STOP/HELP already handled above).
+        # Jill asked (contextually) what they focused on. Capture the reply as the
+        # work_description; she's satisfied as soon as there's real detail and only
+        # asks again if the answer is still vague. STOP/HELP handled above.
         payload = pending.get("payload") or {}
         site = payload.get("site_name") or "your site"
+        ts_id = payload.get("timesheet_id")
         if _is_photo_keyword(body) and payload.get("signon_id"):
-            # Honour a photo request but keep waiting for the detail line.
+            # Honour a photo request but keep the detail thread open.
             return (f"📷 Add photos for {site}:\n{photo_link(payload['signon_id'])}\n\n"
                     f"And a quick line on what you focused on today?")
-        detail = (body or "").strip()
-        await _clear_pending(client, tenant_id, from_number)
-        ts_id = payload.get("timesheet_id")
-        if ts_id and detail:
+        answer = (body or "").strip()
+        if not answer:
+            await _clear_pending(client, tenant_id, from_number)
+            return f"No worries — reply any time with what you focused on at {site}."
+
+        # Record the answer against the open question and backfill the timesheet.
+        conversation = payload.get("conversation") or []
+        if conversation and conversation[-1].get("a") is None:
+            conversation[-1]["a"] = answer
+        else:
+            conversation.append({"q": None, "a": answer})
+        answers = (payload.get("answers") or []) + [answer]
+        if ts_id:
             await client.patch(f"{_url()}/rest/v1/timesheets",
                                headers={**_headers(), "Prefer": "return=minimal"},
                                params={"id": f"eq.{ts_id}"},
-                               json={"work_description": detail})
-            await _stamp_message(client, message_log_id, site_id=payload.get("site_id"),
-                                 category="detail")
-            return f"Perfect — added to your {site} log ✅. Thanks!"
-        return f"No worries — reply any time with what you focused on at {site}."
+                               json={"work_description": " | ".join(answers)})
+        await _stamp_message(client, message_log_id, site_id=payload.get("site_id"),
+                             category="detail")
+
+        # Jill decides whether that's enough (it usually is) or asks one more.
+        follow = None
+        try:
+            follow = await next_question(payload.get("context") or {}, conversation)
+        except Exception:
+            follow = None
+        if follow:
+            conversation.append({"q": follow, "a": None})
+            await _set_pending(client, tenant_id, from_number, user_id, "awaiting_detail",
+                               {**payload, "conversation": conversation, "answers": answers})
+            return follow
+        await _clear_pending(client, tenant_id, from_number)
+        return f"Perfect — added to your {site} log ✅. Thanks!"
 
     signons = await _active_signons(client, user_id)
 
@@ -491,9 +538,9 @@ async def process_inbound(client: httpx.AsyncClient, *, tenant_cfg: dict, user: 
         res = await _finalize(client, tenant_id=tenant_id, user_id=user_id,
                               signon=signon, finish_hhmm=finish, tz=tz)
         if res.get("needs_detail"):
-            await _set_pending(client, tenant_id, from_number, user_id, "awaiting_detail",
-                               {"timesheet_id": res["ts_id"], "site_name": signon.get("site_name"),
-                                "site_id": signon.get("site_id"), "signon_id": signon["id"]})
+            return await _start_detail_capture(
+                client, tenant_id=tenant_id, from_number=from_number, user_id=user_id,
+                signon=signon, hours=res.get("hours"), ts_id=res["ts_id"], fallback=res["reply"])
         return res["reply"]
 
     if done and not finish:
