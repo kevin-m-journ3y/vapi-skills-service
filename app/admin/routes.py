@@ -2618,6 +2618,7 @@ REPORT_TYPES = {
     "site_weekly": "Site Weekly Report",
     "site_progress": "Site Progress Report",
     "site_log": "Site Log",
+    "qr_adoption": "QR Adoption",
 }
 
 @router.get("/admin/tenants/{tenant_id}/reports")
@@ -3016,6 +3017,178 @@ async def get_site_log_data(
 
     except Exception as e:
         logger.error(f"Error building site log: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/admin/reports/qr-adoption", response_class=HTMLResponse)
+async def qr_adoption_page(request: Request):
+    """QR adoption / sign-on gap report page"""
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
+    return templates.TemplateResponse(
+        "reports/qr_adoption.html",
+        {"request": request, "page_title": "QR Adoption & Sign-on Gaps"}
+    )
+
+
+@router.get("/admin/reports/qr-adoption/data")
+async def get_qr_adoption_data(
+    request: Request,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+):
+    """Reconcile QR sign-ons against timesheets to surface where the
+    sign-on -> work -> log cycle breaks:
+      - complete: signed on AND logged a timesheet (same worker/site/day)
+      - unlogged: signed on but never logged  (work we have no record of)
+      - unscanned: logged a timesheet with no sign-on (didn't scan the QR)
+      - stale: sign-ons left active after their day ended
+    """
+    user_session = await get_session_user(request)
+    if user_session.get("role") != "super_admin":
+        tenant_id = user_session.get("tenant_id")
+    if not tenant_id:
+        return {"success": False, "error": "Please select a tenant"}
+
+    from datetime import datetime as _dt, timedelta as _td
+    from zoneinfo import ZoneInfo
+    import re as _re
+
+    SUPA = os.getenv("SUPABASE_URL")
+    headers = {
+        "apikey": os.getenv("SUPABASE_SERVICE_KEY"),
+        "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            tz_resp = await client.get(f"{SUPA}/rest/v1/tenants", headers=headers,
+                                       params={"id": f"eq.{tenant_id}", "select": "timezone"})
+            tzname = "Australia/Sydney"
+            if tz_resp.status_code == 200 and tz_resp.json():
+                tzname = tz_resp.json()[0].get("timezone") or tzname
+            try:
+                tz = ZoneInfo(tzname)
+            except Exception:
+                tz = ZoneInfo("Australia/Sydney")
+            utc = ZoneInfo("UTC")
+
+            # Default range in TENANT-local dates (not UTC).
+            today_local = _dt.now(tz).date()
+            if not end_date:
+                end_date = today_local.isoformat()
+            if not start_date:
+                start_date = (today_local - _td(days=30)).isoformat()
+
+            start_utc = _dt.strptime(start_date + " 00:00:00", "%Y-%m-%d %H:%M:%S").replace(tzinfo=tz).astimezone(utc).isoformat()
+            end_utc = _dt.strptime(end_date + " 23:59:59", "%Y-%m-%d %H:%M:%S").replace(tzinfo=tz).astimezone(utc).isoformat()
+
+            def parse_ts(iso_ts):
+                """Tolerant timestamptz parser -> tz-aware datetime (or None)."""
+                try:
+                    s = (iso_ts or "").strip().replace(" ", "T").replace("Z", "+00:00")
+                    m = _re.search(r"([+-]\d{2}):?(\d{2})?$", s)
+                    if m:
+                        base, tzs = s[:m.start()], f"{m.group(1)}:{m.group(2) or '00'}"
+                    else:
+                        base, tzs = s, "+00:00"
+                    if "." in base:
+                        head, frac = base.split(".", 1)
+                        base = f"{head}.{(frac + '000000')[:6]}"
+                    return _dt.fromisoformat(f"{base}{tzs}").astimezone(tz)
+                except Exception:
+                    return None
+
+            so_r = await client.get(f"{SUPA}/rest/v1/site_signons", headers=headers, params={
+                "tenant_id": f"eq.{tenant_id}", "limit": "2000",
+                "and": f"(signed_on_at.gte.{start_utc},signed_on_at.lte.{end_utc})",
+                "select": "id,user_id,site_id,signed_on_at,signed_off_at,status,signoff_method"})
+            signons = so_r.json() if so_r.status_code == 200 else []
+
+            ts_r = await client.get(f"{SUPA}/rest/v1/timesheets", headers=headers, params={
+                "tenant_id": f"eq.{tenant_id}", "limit": "2000",
+                "and": f"(work_date.gte.{start_date},work_date.lte.{end_date})",
+                "select": "id,user_id,site_id,work_date,hours_worked,vapi_call_id"})
+            timesheets = ts_r.json() if ts_r.status_code == 200 else []
+
+            # Name lookups
+            uids = {s.get("user_id") for s in signons} | {t.get("user_id") for t in timesheets}
+            sids = {s.get("site_id") for s in signons} | {t.get("site_id") for t in timesheets}
+            uids = [u for u in uids if u]; sids = [s for s in sids if s]
+            umap, smap = {}, {}
+            if uids:
+                ur = await client.get(f"{SUPA}/rest/v1/users", headers=headers,
+                                      params={"id": f"in.({','.join(uids)})", "select": "id,name"})
+                if ur.status_code == 200:
+                    umap = {u["id"]: u["name"] for u in ur.json()}
+            if sids:
+                sr = await client.get(f"{SUPA}/rest/v1/entities", headers=headers,
+                                      params={"id": f"in.({','.join(sids)})", "select": "id,name"})
+                if sr.status_code == 200:
+                    smap = {s["id"]: s["name"] for s in sr.json()}
+
+            ts_keys = {(t.get("user_id"), t.get("site_id"), t.get("work_date")) for t in timesheets}
+            so_keys = set()
+            complete, unlogged, stale = 0, [], []
+
+            for s in signons:
+                on_dt = parse_ts(s.get("signed_on_at"))
+                day = on_dt.date().isoformat() if on_dt else None
+                key = (s.get("user_id"), s.get("site_id"), day)
+                so_keys.add(key)
+                off_dt = parse_ts(s.get("signed_off_at")) if s.get("signed_off_at") else None
+                if key in ts_keys:
+                    complete += 1
+                else:
+                    unlogged.append({
+                        "date": day,
+                        "worker": umap.get(s.get("user_id"), "Unknown"),
+                        "site": smap.get(s.get("site_id"), "Unknown"),
+                        "on_time": on_dt.strftime("%I:%M%p").lstrip("0").lower() if on_dt else "",
+                        "off_time": off_dt.strftime("%I:%M%p").lstrip("0").lower() if off_dt else "",
+                        "status": s.get("status"),
+                        "signoff_method": s.get("signoff_method") or "",
+                        "open_hours": round((off_dt - on_dt).total_seconds() / 3600.0, 1) if (on_dt and off_dt) else None,
+                    })
+                if s.get("status") == "active" and on_dt and on_dt.date() < today_local:
+                    stale.append({
+                        "date": day,
+                        "worker": umap.get(s.get("user_id"), "Unknown"),
+                        "site": smap.get(s.get("site_id"), "Unknown"),
+                        "days_open": (today_local - on_dt.date()).days,
+                    })
+
+            unscanned = []
+            for t in timesheets:
+                key = (t.get("user_id"), t.get("site_id"), t.get("work_date"))
+                if key not in so_keys:
+                    unscanned.append({
+                        "date": t.get("work_date"),
+                        "worker": umap.get(t.get("user_id"), "Unknown"),
+                        "site": smap.get(t.get("site_id"), "Unknown"),
+                        "hours": t.get("hours_worked"),
+                        "channel": "voice" if t.get("vapi_call_id") else "sms",
+                    })
+
+            n_so, n_ts = len(signons), len(timesheets)
+            unlogged.sort(key=lambda x: (x["date"] or "", x["worker"]), reverse=True)
+            unscanned.sort(key=lambda x: (x["date"] or "", x["worker"]), reverse=True)
+            stale.sort(key=lambda x: x["days_open"], reverse=True)
+
+            return {"success": True, "start_date": start_date, "end_date": end_date,
+                    "summary": {
+                        "signons": n_so, "timesheets": n_ts, "complete": complete,
+                        "unlogged": len(unlogged), "unscanned": len(unscanned),
+                        "stale": len(stale),
+                        "completion_pct": round(complete / n_so * 100, 1) if n_so else 0,
+                        "scan_pct": round(complete / n_ts * 100, 1) if n_ts else 0,
+                    },
+                    "unlogged": unlogged, "unscanned": unscanned, "stale": stale}
+
+    except Exception as e:
+        logger.error(f"Error building QR adoption report: {e}")
         return {"success": False, "error": str(e)}
 
 

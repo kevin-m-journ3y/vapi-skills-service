@@ -187,6 +187,7 @@
                             <li x-show="enabledReports.includes('site_weekly')" x-cloak><a href="/admin/reports/site-weekly-ai" class="{% if 'site-weekly-ai' in request.url.path %}active{% endif %}">Site Weekly AI</a></li>
                             <li x-show="enabledReports.includes('site_progress')" x-cloak><a href="/admin/reports/site-progress" class="{% if 'site-progress' in request.url.path %}active{% endif %}">Site Progress</a></li>
                             <li x-show="enabledReports.includes('site_log')" x-cloak><a href="/admin/reports/site-log" class="{% if 'site-log' in request.url.path %}active{% endif %}">Site Log</a></li>
+                            <li x-show="enabledReports.includes('qr_adoption')" x-cloak><a href="/admin/reports/qr-adoption" class="{% if 'qr-adoption' in request.url.path %}active{% endif %}">QR Adoption</a></li>
                             <li x-show="enabledReports.includes('voice_notes')" x-cloak><a href="/admin/reports/voice-notes" class="{% if 'voice-notes' in request.url.path %}active{% endif %}">Voice Notes</a></li>
                             <li><a href="/admin/site-notes" class="{% if 'site-notes' in request.url.path %}active{% endif %}">Site Notes</a></li>
                         </ul>

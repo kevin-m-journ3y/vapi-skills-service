@@ -1,0 +1,207 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}QR Adoption & Sign-on Gaps{% endblock %}
+
+{% block content %}
+<div x-data="qrAdoptionReport()" x-init="init()">
+    <div class="mb-6">
+        <h2 class="text-3xl font-bold">QR Adoption &amp; Sign-on Gaps</h2>
+        <p class="text-base-content/70 mt-1">
+            Where the sign-on &rarr; work &rarr; log cycle breaks down.
+        </p>
+    </div>
+
+    <!-- Tenant selector (super admin only) -->
+    <div class="mb-4" x-show="currentUser && currentUser.role === 'super_admin'" x-cloak>
+        <select class="select select-bordered w-full max-w-xs" x-model="selectedTenantId" @change="loadData()">
+            <option value="">Select a tenant...</option>
+            <template x-for="t in availableTenants" :key="t.id">
+                <option :value="t.id" x-text="t.name"></option>
+            </template>
+        </select>
+    </div>
+
+    <!-- Filters -->
+    <div class="card bg-base-100 shadow mb-4">
+        <div class="card-body py-3 flex-row flex-wrap gap-4 items-end">
+            <div class="form-control">
+                <label class="label label-text text-xs">From</label>
+                <input type="date" class="input input-bordered input-sm" x-model="startDate" @change="loadData()" />
+            </div>
+            <div class="form-control">
+                <label class="label label-text text-xs">To</label>
+                <input type="date" class="input input-bordered input-sm" x-model="endDate" @change="loadData()" />
+            </div>
+            <button class="btn btn-primary btn-sm" @click="loadData()">Refresh</button>
+        </div>
+    </div>
+
+    <div x-show="loading" class="flex justify-center py-12"><span class="loading loading-spinner loading-lg"></span></div>
+    <div x-show="!loading && !selectedTenantId && currentUser && currentUser.role === 'super_admin'" class="text-center py-12 text-base-content/50">
+        Select a tenant to view its sign-on gaps.
+    </div>
+
+    <template x-if="!loading && data">
+        <div>
+            <!-- Summary -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+                <div class="stat bg-base-100 shadow rounded-lg py-3">
+                    <div class="stat-title text-xs">Complete cycles</div>
+                    <div class="stat-value text-2xl text-success" x-text="data.summary.complete"></div>
+                    <div class="stat-desc text-xs">signed on &amp; logged</div>
+                </div>
+                <div class="stat bg-base-100 shadow rounded-lg py-3">
+                    <div class="stat-title text-xs">Signed on, never logged</div>
+                    <div class="stat-value text-2xl text-warning" x-text="data.summary.unlogged"></div>
+                    <div class="stat-desc text-xs">work with no record</div>
+                </div>
+                <div class="stat bg-base-100 shadow rounded-lg py-3">
+                    <div class="stat-title text-xs">Logged without scanning</div>
+                    <div class="stat-value text-2xl text-info" x-text="data.summary.unscanned"></div>
+                    <div class="stat-desc text-xs">QR not used</div>
+                </div>
+                <div class="stat bg-base-100 shadow rounded-lg py-3">
+                    <div class="stat-title text-xs">Stale sign-ons</div>
+                    <div class="stat-value text-2xl" :class="data.summary.stale ? 'text-error' : ''" x-text="data.summary.stale"></div>
+                    <div class="stat-desc text-xs">still open</div>
+                </div>
+            </div>
+
+            <div class="alert mb-5 text-sm">
+                <span>
+                    <strong x-text="data.summary.signons"></strong> sign-ons and
+                    <strong x-text="data.summary.timesheets"></strong> timesheets in this period.
+                    <strong x-text="data.summary.completion_pct + '%'"></strong> of sign-ons produced a timesheet;
+                    <strong x-text="data.summary.scan_pct + '%'"></strong> of timesheets had a matching sign-on.
+                </span>
+            </div>
+
+            <!-- Stale sign-ons -->
+            <div class="card bg-base-100 shadow mb-4" x-show="data.stale.length">
+                <div class="card-body py-3">
+                    <h3 class="font-semibold text-sm mb-2">⚠ Sign-ons still open</h3>
+                    <div class="overflow-x-auto">
+                        <table class="table table-sm table-zebra">
+                            <thead><tr><th>Signed on</th><th>Worker</th><th>Site</th><th class="text-right">Days open</th></tr></thead>
+                            <tbody>
+                                <template x-for="(r, i) in data.stale" :key="i">
+                                    <tr>
+                                        <td x-text="r.date"></td>
+                                        <td x-text="r.worker"></td>
+                                        <td x-text="r.site"></td>
+                                        <td class="text-right"><span class="badge badge-error badge-sm" x-text="r.days_open"></span></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Signed on but never logged -->
+            <div class="card bg-base-100 shadow mb-4">
+                <div class="card-body py-3">
+                    <h3 class="font-semibold text-sm mb-2">Signed on but never logged a timesheet</h3>
+                    <p class="text-xs text-base-content/60 mb-2">Work happened on site but there's no record of it — chase these.</p>
+                    <div class="overflow-x-auto">
+                        <table class="table table-sm table-zebra">
+                            <thead>
+                                <tr><th>Date</th><th>Worker</th><th>Site</th><th>On</th><th>Off</th>
+                                    <th class="text-right">Open (h)</th><th>Closed by</th></tr>
+                            </thead>
+                            <tbody>
+                                <template x-for="(r, i) in data.unlogged" :key="i">
+                                    <tr>
+                                        <td x-text="r.date"></td>
+                                        <td x-text="r.worker"></td>
+                                        <td x-text="r.site"></td>
+                                        <td x-text="r.on_time || '-'"></td>
+                                        <td x-text="r.off_time || '-'"></td>
+                                        <td class="text-right" x-text="r.open_hours !== null ? r.open_hours : '-'"></td>
+                                        <td>
+                                            <span class="badge badge-ghost badge-sm"
+                                                  x-text="r.status === 'active' ? 'still open' : (r.signoff_method || '-')"></span>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                        <div x-show="!data.unlogged.length" class="text-center py-4 text-base-content/50">
+                            Every sign-on produced a timesheet. 🎉
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Logged without scanning -->
+            <div class="card bg-base-100 shadow mb-4">
+                <div class="card-body py-3">
+                    <h3 class="font-semibold text-sm mb-2">Logged a timesheet without scanning in</h3>
+                    <p class="text-xs text-base-content/60 mb-2">The work is recorded, but the QR wasn't used — an adoption gap.</p>
+                    <div class="overflow-x-auto">
+                        <table class="table table-sm table-zebra">
+                            <thead><tr><th>Date</th><th>Worker</th><th>Site</th><th class="text-center">Channel</th><th class="text-right">Hours</th></tr></thead>
+                            <tbody>
+                                <template x-for="(r, i) in data.unscanned" :key="i">
+                                    <tr>
+                                        <td x-text="r.date"></td>
+                                        <td x-text="r.worker"></td>
+                                        <td x-text="r.site"></td>
+                                        <td class="text-center">
+                                            <span class="badge badge-sm" :class="r.channel === 'sms' ? 'badge-info' : 'badge-secondary'"
+                                                  x-text="r.channel === 'sms' ? 'SMS' : 'Voice'"></span>
+                                        </td>
+                                        <td class="text-right" x-text="r.hours !== null ? r.hours : '-'"></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                        <div x-show="!data.unscanned.length" class="text-center py-4 text-base-content/50">
+                            Every timesheet had a matching sign-on. 🎉
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+</div>
+
+<script>
+function qrAdoptionReport() {
+    return {
+        currentUser: null, availableTenants: [], selectedTenantId: '',
+        startDate: '', endDate: '', data: null, loading: false,
+
+        async init() {
+            // Local date (not toISOString, which is UTC and shifts the day in AU mornings).
+            const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            const today = new Date(); const past = new Date(); past.setDate(today.getDate() - 30);
+            this.endDate = fmt(today); this.startDate = fmt(past);
+            try {
+                const r = await fetch('/admin/auth/me', { credentials: 'same-origin' });
+                if (r.ok) { const d = await r.json(); this.currentUser = d.user;
+                    if (this.currentUser?.tenant_id) this.selectedTenantId = this.currentUser.tenant_id; }
+            } catch (e) {}
+            if (this.currentUser?.role === 'super_admin') {
+                try { const r = await fetch('/admin/tenants/data', { credentials: 'same-origin' });
+                    if (r.ok) { const d = await r.json(); if (d.success) this.availableTenants = d.tenants || []; } } catch (e) {}
+            }
+            if (this.selectedTenantId) await this.loadData();
+        },
+
+        async loadData() {
+            if (!this.selectedTenantId) { this.data = null; return; }
+            this.loading = true;
+            try {
+                const url = `/admin/reports/qr-adoption/data?tenant_id=${this.selectedTenantId}`
+                          + `&start_date=${this.startDate}&end_date=${this.endDate}`;
+                const r = await fetch(url, { credentials: 'same-origin' });
+                const d = await r.json();
+                this.data = d.success ? d : null;
+            } catch (e) { this.data = null; }
+            this.loading = false;
+        },
+    }
+}
+</script>
+{% endblock %}
