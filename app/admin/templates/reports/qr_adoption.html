@@ -119,8 +119,12 @@
                                         <td x-text="r.off_time || '-'"></td>
                                         <td class="text-right" x-text="r.open_hours !== null ? r.open_hours : '-'"></td>
                                         <td>
-                                            <span class="badge badge-ghost badge-sm"
-                                                  x-text="r.status === 'active' ? 'still open' : (r.signoff_method || '-')"></span>
+                                            <span class="badge badge-sm"
+                                                  :class="r.status === 'active' ? 'badge-error'
+                                                          : (r.signoff_method === 'auto_expired' ? 'badge-warning' : 'badge-ghost')"
+                                                  x-text="r.status === 'active' ? 'still open'
+                                                          : (r.signoff_method === 'auto_expired' ? 'auto-closed'
+                                                             : (r.signoff_method || '-'))"></span>
                                         </td>
                                     </tr>
                                 </template>

@@ -30,6 +30,7 @@ import httpx
 
 from app.services.photo_upload import photo_link
 from app.services.sms_detail_ai import build_context, next_question
+from app.services.signon_service import close_stale_signons
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +167,13 @@ async def _get_tenant_tz(client, tenant_id: str) -> ZoneInfo:
 
 
 async def _active_signons(client, user_id: str) -> list:
-    """Active sign-ons for the user, enriched with site name."""
+    """Active sign-ons for the user, enriched with site name.
+
+    Lazily closes anything left open past the cutoff first: a forgotten sign-on
+    from days ago would otherwise capture today's update and log the timesheet
+    against the wrong date.
+    """
+    await close_stale_signons(user_id=user_id)
     resp = await client.get(f"{_url()}/rest/v1/site_signons", headers=_headers(), params={
         "user_id": f"eq.{user_id}", "status": "eq.active",
         "select": "id,site_id,signed_on_at,entities(name)",

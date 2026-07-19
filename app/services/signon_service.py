@@ -408,6 +408,56 @@ async def close_signon(signon_id: str, method: str, timesheet_id: Optional[str] 
         return resp.status_code in (200, 204)
 
 
+STALE_SIGNON_HOURS = 18
+
+
+async def close_stale_signons(user_id: Optional[str] = None, tenant_id: Optional[str] = None,
+                              cutoff_hours: int = STALE_SIGNON_HOURS) -> int:
+    """Close sign-ons left active past the cutoff (worker never signed off).
+
+    Lazy cleanup, called at the points where a stale sign-on would actually
+    cause harm — SMS attribution and billing — so no scheduled job is needed.
+    Without this, a forgotten sign-on stays "open" indefinitely and captures a
+    later text update, logging the timesheet against the wrong date.
+
+    Deliberately closes the sign-on ONLY: it never creates a timesheet, so it
+    can't fabricate billable work. Returns the number closed.
+    """
+    if not user_id and not tenant_id:
+        return 0  # never sweep globally by accident
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=cutoff_hours)).isoformat()
+    params = {"status": "eq.active", "signed_on_at": f"lt.{cutoff}", "select": "id"}
+    if user_id:
+        params["user_id"] = f"eq.{user_id}"
+    if tenant_id:
+        params["tenant_id"] = f"eq.{tenant_id}"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(f"{_url()}/rest/v1/site_signons",
+                                    headers=_headers(), params=params)
+            rows = resp.json() if resp.status_code == 200 else []
+            if not rows:
+                return 0
+            now = datetime.now(timezone.utc).isoformat()
+            ids = ",".join(r["id"] for r in rows)
+            # Deliberately leave signed_off_at NULL: we don't know when they
+            # actually left, and stamping "now" would record an absurd shift
+            # (a sign-on abandoned in March would look like a 116-day day).
+            await client.patch(
+                f"{_url()}/rest/v1/site_signons",
+                headers={**_headers(), "Prefer": "return=minimal"},
+                params={"id": f"in.({ids})"},
+                json={"status": "signed_off", "signoff_method": "auto_expired",
+                      "updated_at": now},
+            )
+            logger.info("Auto-closed %d stale sign-on(s) (user=%s tenant=%s)",
+                        len(rows), user_id, tenant_id)
+            return len(rows)
+    except Exception as e:
+        logger.warning("Stale sign-on cleanup failed: %s", e)
+        return 0
+
+
 async def close_signons_for_user_site(user_id: str, site_id: str, method: str, timesheet_id: Optional[str] = None):
     """Close active sign-ons for a user at a specific site (used by timesheet skill)."""
     async with httpx.AsyncClient() as client:

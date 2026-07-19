@@ -4635,13 +4635,19 @@ async def preview_billing(
     start_date: str = "",
     end_date: str = "",
 ):
-    """Preview billable calls for a tenant in a date range"""
+    """Preview billable units (artifacts) for a tenant in a date range"""
     user_session = await get_session_user(request)
     if user_session.get("role") != "super_admin":
         raise HTTPException(status_code=403, detail="Super admin access required")
 
     if not tenant_id or not start_date or not end_date:
         return {"success": False, "error": "tenant_id, start_date, and end_date required"}
+
+    # Lazy cleanup: close any sign-ons left open past the cutoff so the period
+    # isn't skewed by danglers. Closes sign-ons only — never creates a timesheet,
+    # so this cannot change what is billed.
+    from app.services.signon_service import close_stale_signons
+    await close_stale_signons(tenant_id=tenant_id)
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
