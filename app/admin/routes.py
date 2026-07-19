@@ -4553,6 +4553,7 @@ async def get_billing_config(tenant_id: str, request: Request):
                     "cost_per_call_timesheet": 1.00,
                     "cost_per_call_voice_notes": 1.00,
                     "cost_per_call_site_updates": 2.00,
+                    "cost_per_signon_no_timesheet": 0.00,
                     "usd_to_aud_rate": 1.5500,
                     "billing_cycle_day": None,
                     "invoice_prefix": "INV"
@@ -4588,6 +4589,7 @@ async def save_billing_config(tenant_id: str, request: Request):
                 "cost_per_call_timesheet": body.get("cost_per_call_timesheet", 1.00),
                 "cost_per_call_voice_notes": body.get("cost_per_call_voice_notes", 1.00),
                 "cost_per_call_site_updates": body.get("cost_per_call_site_updates", 2.00),
+                "cost_per_signon_no_timesheet": body.get("cost_per_signon_no_timesheet", 0.00),
                 "usd_to_aud_rate": body.get("usd_to_aud_rate", 1.5500),
                 "billing_cycle_day": body.get("billing_cycle_day") or None,
                 "invoice_prefix": body.get("invoice_prefix", "INV"),
@@ -4671,6 +4673,7 @@ async def preview_billing(
                     "cost_per_call_timesheet": 1.00,
                     "cost_per_call_voice_notes": 1.00,
                     "cost_per_call_site_updates": 2.00,
+                    "cost_per_signon_no_timesheet": 0.00,
                     "usd_to_aud_rate": 1.5500,
                 }
 
@@ -4739,6 +4742,67 @@ async def preview_billing(
                         "created_at": row.get("created_at"),
                         "channel": "voice" if row.get("vapi_call_id") else "sms",
                     })
+
+            # 2b. Sign-ons that never produced a timesheet are billable in their
+            # own right (QR hosted, worker identified, attendance recorded,
+            # reminders sent) — but ONLY when no timesheet exists for that
+            # worker/site/day, so a completed cycle is never charged twice.
+            # Matching uses the TENANT-LOCAL date: an early-morning AU sign-on is
+            # the previous day in UTC, which would wrongly look like an orphan.
+            signon_rate = float(config.get("cost_per_signon_no_timesheet") or 0.00)
+            if signon_rate > 0:
+                ts_match_resp = await client.get(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/timesheets",
+                    headers=headers,
+                    params={
+                        "tenant_id": f"eq.{tenant_id}",
+                        "and": f"(work_date.gte.{start_date},work_date.lte.{end_date})",
+                        "select": "user_id,site_id,work_date", "limit": "10000",
+                    },
+                )
+                ts_keys = set()
+                if ts_match_resp.status_code == 200:
+                    for t in ts_match_resp.json():
+                        ts_keys.add((t.get("user_id"), t.get("site_id"), t.get("work_date")))
+
+                so_resp = await client.get(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/site_signons",
+                    headers=headers,
+                    params={
+                        "tenant_id": f"eq.{tenant_id}",
+                        "and": f"(signed_on_at.gte.{start_utc},signed_on_at.lte.{end_utc})",
+                        "select": "id,user_id,site_id,signed_on_at",
+                        "order": "signed_on_at.asc", "limit": "10000",
+                    },
+                )
+                if so_resp.status_code == 200:
+                    import re as _re_so
+                    for s in so_resp.json():
+                        raw = (s.get("signed_on_at") or "").strip().replace(" ", "T").replace("Z", "+00:00")
+                        m = _re_so.search(r"([+-]\d{2}):?(\d{2})?$", raw)
+                        if m:
+                            base_s, tzs = raw[:m.start()], f"{m.group(1)}:{m.group(2) or '00'}"
+                        else:
+                            base_s, tzs = raw, "+00:00"
+                        if "." in base_s:
+                            head, frac = base_s.split(".", 1)
+                            base_s = f"{head}.{(frac + '000000')[:6]}"
+                        try:
+                            local_day = dt_cls.fromisoformat(f"{base_s}{tzs}").astimezone(tz).date().isoformat()
+                        except Exception:
+                            continue
+                        if (s.get("user_id"), s.get("site_id"), local_day) in ts_keys:
+                            continue  # completed cycle — already billed as a timesheet
+                        artifacts.append({
+                            "artifact_id": s["id"],
+                            "artifact_type": "signon",
+                            "type_key": "signon_no_timesheet",
+                            "vapi_call_id": None,
+                            "user_id": s.get("user_id"),
+                            "site_id": s.get("site_id"),
+                            "created_at": s.get("signed_on_at"),
+                            "channel": "qr",
+                        })
 
             # 3. Enrich with VAPI API data (duration + cost)
             # CQA table often has null duration/cost, so fetch from VAPI API
@@ -4825,6 +4889,7 @@ async def preview_billing(
                 "voice_notes": float(config.get("cost_per_call_voice_notes") or 1.00),
                 "site_updates": float(config.get("cost_per_call_site_updates") or 2.00),
                 "intra_day_update": float(config.get("cost_per_intra_day_update") or 0.00),
+                "signon_no_timesheet": float(config.get("cost_per_signon_no_timesheet") or 0.00),
             }
 
             calls_list = []
